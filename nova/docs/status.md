@@ -62,3 +62,8 @@
 - [x] 確認：XY パッドは本物と同じ入力で開き、なぞると点が付いてきて音が出る・離すと止まる。傾きは、演奏モードでセンサーが登録され、解除で外れることを `dumpsys sensorservice` で確認
 - [ ] 実機で確認：傾きで音が変わるか、向きと効き具合（本体を動かせないため未確認）
 - 作業中のパッチは `work-in-progress.vcv` として保存してからテストした
+
+## 公開
+
+- 2026-11-12：ユーザーの依頼で、GitHub に fork を作って `nova` ブランチを push した（https://github.com/jhorikawa/RackDroid 、本家 `nowheel/RackDroid` の fork、公開）。計画では「push しない」としていたが、これで変更。以後も push は依頼があったときだけ行う
+- リモート：`origin` = 自分の fork、`upstream` = 本家
