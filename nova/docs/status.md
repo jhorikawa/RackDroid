@@ -67,3 +67,4 @@
 
 - 2026-11-12：ユーザーの依頼で、GitHub に fork を作って `nova` ブランチを push した（https://github.com/jhorikawa/RackDroid 、本家 `nowheel/RackDroid` の fork、公開）。計画では「push しない」としていたが、これで変更。以後も push は依頼があったときだけ行う
 - リモート：`origin` = 自分の fork、`upstream` = 本家
+- GitHub の既定のブランチは `nova`（リポジトリを開くと改造版が見える）。`main` は本家と同じ内容のまま残し、`nova` をマージしない。本家の更新は `main` に取り込んでから `nova` に反映する
