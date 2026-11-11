@@ -12,6 +12,8 @@
  *   B            leave edit / cancel the cable / unplug the focused jack
  *   Y            reset the focused knob to its default
  *   right stick  turn the focused knob directly
+ *   left stick   pan the rack
+ *   L2 / R2      zoom out / in
  *   L1 / R1      previous / next module
  *   SELECT       cycle the zoom
  *
@@ -51,6 +53,7 @@
 #include "cable_park.hpp"
 #include "gamepad_input.hpp"
 #include "gamepad_nav.hpp"
+#include "touch_input.hpp"
 #include "window_android.hpp"
 
 #if defined(__ANDROID__)
@@ -98,6 +101,9 @@ static bool g_cabling = false;
 static Focus g_cableFrom;
 /** The rack is scrolling after the focus. */
 static bool g_follow = false;
+/** The left stick or the triggers moved the view since the focus last moved,
+so the focus may have been left behind off screen. */
+static bool g_viewMoved = false;
 
 static int g_dirHeld = -1;
 static double g_repeatAt = 0.0;
@@ -115,6 +121,7 @@ static const double REPEAT_DELAY = 0.32;
 static const double REPEAT_MOVE = 0.09;
 static const double REPEAT_EDIT = 0.035;
 static const float STICK_DEADZONE = 0.18f;
+static const float TRIGGER_DEADZONE = 0.08f;
 /** Scene units kept clear around the focused control when scrolling to it. */
 static const float FOLLOW_MARGIN = 34.f;
 /** The module palette and the status strip sit over the bottom of the rack. */
@@ -260,19 +267,29 @@ static void setFocus(const Focus& f) {
 	g_focus = f;
 	g_remembered[f.moduleId] = f;
 	g_follow = true;
+	g_viewMoved = false;
 }
 
 
-/** Makes sure there is a live focus. Returns false when one had to be picked,
-so the press that asked only reveals the ring instead of also acting on it. */
-static bool ensureFocus() {
-	if (widgetOf(g_focus) && allowed(g_focus))
-		return true;
+/** The part of the rack view nothing sits on top of: below the toolbar, above
+the palette and the status strip. Scene units. */
+static math::Rect clearView() {
+	app::RackScrollWidget* rs = APP->scene->rackScroll;
+	math::Vec o = rs->getAbsoluteOffset(math::Vec(0.f, 0.f));
+	float top = std::fmax(o.y, cableParkTopInset());
+	float bottom = o.y + rs->box.size.y - BOTTOM_INSET;
+	if (bottom < top)
+		top = bottom = (top + bottom) * 0.5f;
+	return math::Rect(o.x, top, rs->box.size.x, bottom - top);
+}
+
+
+/** Focuses the control nearest the middle of what is on screen. */
+static void pickNearCentre() {
 	app::RackWidget* rack = rackWidget();
-	if (!rack)
-		return false;
-	// The control nearest the middle of what is on screen.
-	math::Vec centre = APP->scene->box.size.mult(0.5f);
+	if (!rack || !APP->scene->rackScroll)
+		return;
+	math::Vec centre = clearView().getCenter();
 	float best = INFINITY;
 	Focus pick;
 	for (app::ModuleWidget* mw : rack->getModules()) {
@@ -291,8 +308,32 @@ static bool ensureFocus() {
 			}
 		}
 	}
-	if (pick.kind != FOCUS_NONE)
-		setFocus(pick);
+	if (pick.kind == FOCUS_NONE)
+		return;
+	if (pick == g_focus) {
+		g_follow = true;
+		g_viewMoved = false;
+		return;
+	}
+	setFocus(pick);
+}
+
+
+/** Makes sure there is a live focus, on screen. Returns false when one had to
+be picked, so the press that asked only reveals the ring instead of also acting
+on a control the user was not looking at. */
+static bool ensureFocus() {
+	widget::Widget* w = widgetOf(g_focus);
+	if (w && allowed(g_focus)) {
+		if (!g_viewMoved)
+			return true;
+		// The view was panned or zoomed by hand. If that left the focus off
+		// screen, the next press starts from what is being looked at now.
+		g_viewMoved = false;
+		if (clearView().contains(w->getAbsoluteOffset(w->box.size.mult(0.5f))))
+			return true;
+	}
+	pickNearCentre();
 	return false;
 }
 
@@ -689,6 +730,45 @@ static void turnWithStick(float dt) {
 }
 
 
+static float shapeTrigger(float v) {
+	if (v < TRIGGER_DEADZONE)
+		return 0.f;
+	return (v - TRIGGER_DEADZONE) / (1.f - TRIGGER_DEADZONE);
+}
+
+
+/** The left stick pans the rack and the triggers zoom it, so the view can be
+moved without a finger -- which on a small screen grabs a module or a knob as
+often as it grabs the background. */
+static void panAndZoom(float dt) {
+	app::RackScrollWidget* rs = APP->scene->rackScroll;
+	if (!rs)
+		return;
+	math::Vec pan(shapeStick(gamepadAxis(PAD_LX)), shapeStick(gamepadAxis(PAD_LY)));
+	if (pan.x != 0.f || pan.y != 0.f) {
+		// A screen and a half a second at full tilt, at any zoom.
+		float speed = std::fmax(rs->box.size.x, rs->box.size.y) * 1.5f;
+		rs->offset = rs->offset.plus(pan.mult(speed * dt));
+		g_follow = false;
+		g_viewMoved = true;
+		windowNoteInteraction();
+	}
+	float pull = shapeTrigger(gamepadAxis(PAD_R2)) - shapeTrigger(gamepadAxis(PAD_L2));
+	if (pull != 0.f) {
+		float zoom = rs->getZoom();
+		// Two octaves end to end (0.5x to 2x) in a little over a second.
+		float next = math::clamp(zoom * std::pow(2.f, pull * 1.6f * dt), 0.25f, MAX_RACK_ZOOM);
+		if (next != zoom) {
+			rs->setZoom(next);
+			touchNoteZooming();
+			g_follow = false;
+			g_viewMoved = true;
+		}
+		windowNoteInteraction();
+	}
+}
+
+
 static void followFocus(float dt) {
 	if (!g_follow || !g_active)
 		return;
@@ -699,11 +779,11 @@ static void followFocus(float dt) {
 		return;
 	}
 	math::Vec p = w->getAbsoluteOffset(w->box.size.mult(0.5f));
-	math::Vec o = rs->getAbsoluteOffset(math::Vec(0.f, 0.f));
-	float left = o.x + FOLLOW_MARGIN;
-	float right = o.x + rs->box.size.x - FOLLOW_MARGIN;
-	float top = std::fmax(o.y, cableParkTopInset()) + FOLLOW_MARGIN;
-	float bottom = o.y + rs->box.size.y - BOTTOM_INSET - FOLLOW_MARGIN;
+	math::Rect view = clearView();
+	float left = view.pos.x + FOLLOW_MARGIN;
+	float right = view.pos.x + view.size.x - FOLLOW_MARGIN;
+	float top = view.pos.y + FOLLOW_MARGIN;
+	float bottom = view.pos.y + view.size.y - FOLLOW_MARGIN;
 	if (bottom < top) {
 		// Hardly any room between the toolbar and the palette: aim for the
 		// middle of what there is.
@@ -756,6 +836,7 @@ void gamepadNavStep() {
 	}
 
 	turnWithStick(dt);
+	panAndZoom(dt);
 
 	// The stick leaves no "done" behind it: an edit it made becomes an undo
 	// step once the knob has been left alone for a moment.

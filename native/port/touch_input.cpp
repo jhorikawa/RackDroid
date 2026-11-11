@@ -918,6 +918,11 @@ double touchSecondsSincePinch() {
 }
 
 
+void touchNoteZooming() {
+	st.lastPinchTime = rack::system::getTime();
+}
+
+
 void touchStep() {
 	if (!APP->event || !APP->window)
 		return;

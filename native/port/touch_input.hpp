@@ -32,6 +32,11 @@ it to stop re-rendering module framebuffers while the zoom is still moving;
 see Window::getFrameDurationRemaining() in window_android.cpp. */
 double touchSecondsSincePinch();
 
+/** The zoom is being changed by something other than two fingers (the game
+controller's triggers): counts as a pinch in progress, so the renderer holds
+off the same framebuffer rebuilds. */
+void touchNoteZooming();
+
 /** Per-frame housekeeping (long-press detection). Call once per rendered
 frame, before Window::step(). */
 void touchStep();
