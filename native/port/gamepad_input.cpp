@@ -161,4 +161,14 @@ bool gamepadSeen() {
 }
 
 
+void gamepadInputReset() {
+	for (int i = 0; i < PAD_BUTTONS; i++)
+		setButton(i, false);
+	for (int i = 0; i < 4; i++)
+		g_hat[i] = false;
+	for (int i = 0; i < PAD_AXES; i++)
+		g_axis[i] = 0.f;
+}
+
+
 } // namespace rackdroid

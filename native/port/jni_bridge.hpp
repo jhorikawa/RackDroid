@@ -101,6 +101,10 @@ Fire-and-forget: does not wait for Java, unlike the clipboard/thermal reads
 above. */
 void showToast(const std::string& text);
 
+/** Opens one of the game controller's menus (GamepadMenu.kt): 0 the main
+menu, 1 the module picker. */
+void showGamepadMenu(int which);
+
 /** Same idea, for the two notices the engine itself can raise: native has
 no Android string resources of its own, so this passes a kind rather than
 text, and Java resolves + localizes it (0 = engine_maxed_out, 1 =

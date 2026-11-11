@@ -732,7 +732,13 @@ class MainActivity : NativeActivity() {
 			midiButton, keyboardButton, recordButton, creditsButton,
 			undoButton, redoButton, selectButton, copyButton, pasteButton,
 			deleteButton, lockButton, fullLockButton)
-			.forEachIndexed { index, view -> addTool(view, index) }
+			.forEachIndexed { index, view ->
+				addTool(view, index)
+				// Kept for the game controller's Tools menu (GamepadMenu.kt).
+				if (index == 0)
+					gamepadTools.clear()
+				gamepadTools.add(view)
+			}
 		menuRow.setBackgroundColor(Color.TRANSPARENT)
 		// The line between the menus and the tools is also the load meter: how
 		// much of its time the audio engine is using, filled from the left.
@@ -1893,6 +1899,34 @@ class MainActivity : NativeActivity() {
 	private var wizard: Wizard? = null
 	private var activeTutorial: Wizard? = null
 
+	/** The toolbar's buttons in toolbar order, for the game controller's Tools
+	 * menu: it presses these, so it has no behaviour of its own to keep up. */
+	private val gamepadTools = ArrayList<View>()
+
+	/** Menus for a game controller: START and X, see GamepadMenu.kt. */
+	private val gamepadMenu by lazy {
+		GamepadMenu(this,
+			getModelsJson = { nativeBrowserModelsJson() },
+			requestBuild = { nativeBrowserRequestBuild() },
+			chooseAt = { key, x, y -> nativeBrowserChooseAt(key, x, y) },
+			openRackMenu = { nativeToolbarTap(it) },
+			history = { nativeHistoryAction(it) },
+			command = { nativeGamepadCommand(it) },
+			tools = { gamepadTools })
+	}
+
+	/** Called from native (render thread) when START (0) or X (1) is pressed
+	 * on a game controller. */
+	fun showGamepadMenuFromNative(which: Int) {
+		uiHandler.post {
+			try {
+				gamepadMenu.show(which)
+			} catch (t: Throwable) {
+				jlog("showGamepadMenu FAILED: ${android.util.Log.getStackTraceString(t)}")
+			}
+		}
+	}
+
 	/** Bottom module palette (🧩): type chips + draggable thumbnails. */
 	private val modulePalette by lazy {
 		ModulePalette(this,
@@ -3011,6 +3045,7 @@ class MainActivity : NativeActivity() {
 	private external fun nativeMenuShown()
 	private external fun nativeBackPressed()
 	private external fun nativeToolbarTap(index: Int)
+	private external fun nativeGamepadCommand(command: Int)
 	private external fun nativeBrowserModelsJson(): String
 	private external fun nativeBrowserModelsGeneration(): Long
 	private external fun nativeBrowserChooseAt(key: String, x: Float, y: Float)

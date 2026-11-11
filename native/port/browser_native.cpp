@@ -43,6 +43,7 @@
 
 #include "browser_native.hpp"
 #include "label_overlay.hpp"
+#include "gamepad_nav.hpp"
 #include "jni_bridge.hpp"
 
 #define LOGI(...) do { __android_log_print(ANDROID_LOG_INFO, "rackdroid.browser", __VA_ARGS__); INFO(__VA_ARGS__); } while (0)
@@ -178,6 +179,7 @@ static void chooseModel(plugin::Model* model) {
 
 	moduleWidget->loadTemplate();
 	noteModuleAdded(module->id);
+	gamepadNavFocusModule(module->id);
 
 	history::ModuleAdd* ha = new history::ModuleAdd;
 	ha->setModule(moduleWidget);

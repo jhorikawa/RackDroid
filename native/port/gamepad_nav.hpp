@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace rackdroid {
 
 /** A controller button changed state (PadButton in gamepad_input.hpp).
@@ -17,6 +19,10 @@ void installGamepadNav();
 
 /** A finger took over: the ring steps out of the way until the next button. */
 void gamepadNavNoteTouch();
+
+/** A module was just added: the focus goes to it, so what follows a pick from
+the controller's module menu is on the new module. */
+void gamepadNavFocusModule(int64_t moduleId);
 
 /** Play mode: the right stick is two voltages for the patch (gamepad_midi.cpp)
 instead of turning the focused knob. R3 toggles it. */

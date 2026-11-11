@@ -62,6 +62,7 @@ static jmethodID midPatchReady;
 static jmethodID midLanguageChanged;
 static jmethodID midThermalStatus;
 static jmethodID midShowToast;
+static jmethodID midShowGamepadMenu;
 static jmethodID midShowEngineNotice;
 static jmethodID midRequestAudioFocus;
 
@@ -183,6 +184,9 @@ void jniInit(ANativeActivity* activity) {
 	if (env->ExceptionCheck())
 		env->ExceptionClear();
 	midShowToast = env->GetMethodID(activityCls, "showToastFromNative", "(Ljava/lang/String;)V");
+	if (env->ExceptionCheck())
+		env->ExceptionClear();
+	midShowGamepadMenu = env->GetMethodID(activityCls, "showGamepadMenuFromNative", "(I)V");
 	if (env->ExceptionCheck())
 		env->ExceptionClear();
 	midShowEngineNotice = env->GetMethodID(activityCls, "showEngineNoticeFromNative", "(I)V");
@@ -434,6 +438,16 @@ void showToast(const std::string& text) {
 	env->DeleteLocalRef(js);
 	if (env->ExceptionCheck())
 		logAndClearException("showToast");
+}
+
+
+void showGamepadMenu(int which) {
+	JNIEnv* env = getEnv();
+	if (!env || !midShowGamepadMenu)
+		return;
+	env->CallVoidMethod(activityObj, midShowGamepadMenu, (jint) which);
+	if (env->ExceptionCheck())
+		logAndClearException("showGamepadMenu");
 }
 
 

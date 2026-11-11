@@ -49,4 +49,10 @@ float gamepadAxis(int axis);
 /** True once a controller has sent anything in this session. */
 bool gamepadSeen();
 
+/** Forget what is held. When another window takes the keys (a dialog, a
+bottom sheet) the releases go to it, not here: without this a button pressed
+as the window opened stays down for good, and a stick that was tilted keeps
+panning under it. */
+void gamepadInputReset();
+
 } // namespace rackdroid

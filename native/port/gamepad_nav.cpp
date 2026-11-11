@@ -21,6 +21,9 @@
  *                while nothing else can pan.
  *   L1 / R1      previous / next module
  *   SELECT       cycle the zoom
+ *   X            add a module
+ *   START        main menu (GamepadMenu.kt): the Rack menus, undo/redo, the
+ *                toolbar's tools, the focused module's own menu
  *
  * Parameters are changed through their ParamQuantity, not by faking a drag, so
  * every plugin's controls behave the same. Changes and cables go on the undo
@@ -30,6 +33,7 @@
  * loop that draws), so Rack's widgets are touched directly.
  */
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <map>
 #include <string>
@@ -58,10 +62,13 @@
 #include "cable_park.hpp"
 #include "gamepad_input.hpp"
 #include "gamepad_nav.hpp"
+#include "jni_bridge.hpp"
+#include "menu_native.hpp"
 #include "touch_input.hpp"
 #include "window_android.hpp"
 
 #if defined(__ANDROID__)
+#include <jni.h>
 #include <android/log.h>
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "rackdroid.pad", __VA_ARGS__)
 #else
@@ -135,6 +142,11 @@ static const float FOLLOW_MARGIN = 34.f;
 /** The module palette and the status strip sit over the bottom of the rack. */
 static const float BOTTOM_INSET = 92.f;
 static const float ZOOM_LEVELS[] = {1.f, 2.f, 0.5f};
+
+/** Asked for from GamepadMenu.kt on the UI thread, carried out here on the
+render thread. Matches the constants there. */
+enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1 };
+static std::atomic<int> g_command{CMD_NONE};
 
 
 // --- lookups ----------------------------------------------------------------
@@ -395,6 +407,29 @@ static void moveFocus(math::Vec dir) {
 }
 
 
+/** The control to start from in a module: top-left, knobs before jacks. */
+static bool firstItemOf(app::ModuleWidget* mw, Focus& out) {
+	std::vector<Item> items;
+	collect(mw, items);
+	const Item* first = NULL;
+	for (const Item& it : items) {
+		if (!allowed(it.focus))
+			continue;
+		bool better = !first
+			|| (it.focus.kind == FOCUS_PARAM) > (first->focus.kind == FOCUS_PARAM)
+			|| ((it.focus.kind == FOCUS_PARAM) == (first->focus.kind == FOCUS_PARAM)
+				&& (it.pos.y < first->pos.y - 4.f
+					|| (std::fabs(it.pos.y - first->pos.y) <= 4.f && it.pos.x < first->pos.x)));
+		if (better)
+			first = &it;
+	}
+	if (!first)
+		return false;
+	out = first->focus;
+	return true;
+}
+
+
 static void stepModule(int delta) {
 	app::RackWidget* rack = rackWidget();
 	if (!rack)
@@ -426,23 +461,9 @@ static void stepModule(int delta) {
 			setFocus(mem->second);
 			return;
 		}
-		std::vector<Item> items;
-		collect(mw, items);
-		// Top-left control, knobs before jacks.
-		const Item* first = NULL;
-		for (const Item& it : items) {
-			if (!allowed(it.focus))
-				continue;
-			bool better = !first
-				|| (it.focus.kind == FOCUS_PARAM) > (first->focus.kind == FOCUS_PARAM)
-				|| ((it.focus.kind == FOCUS_PARAM) == (first->focus.kind == FOCUS_PARAM)
-					&& (it.pos.y < first->pos.y - 4.f
-						|| (std::fabs(it.pos.y - first->pos.y) <= 4.f && it.pos.x < first->pos.x)));
-			if (better)
-				first = &it;
-		}
-		if (first) {
-			setFocus(first->focus);
+		Focus first;
+		if (firstItemOf(mw, first)) {
+			setFocus(first);
 			return;
 		}
 	}
@@ -672,6 +693,16 @@ void gamepadNavButton(int button, bool down) {
 		cycleZoom();
 		return;
 	}
+	if (button == PAD_START || button == PAD_X) {
+		// The menu is another window and takes the keys with it, this
+		// button's release included. Coming back from it the ring shows:
+		// the controller is plainly in use, and a module added from the
+		// menu is where the focus goes next.
+		g_active = true;
+		showGamepadMenu(button == PAD_X ? 1 : 0);
+		gamepadInputReset();
+		return;
+	}
 
 	if (!g_active) {
 		// The ring is put away. B leaves it so; any other button brings it
@@ -708,6 +739,34 @@ void gamepadNavButton(int button, bool down) {
 
 bool gamepadPlayMode() {
 	return g_playMode;
+}
+
+
+void gamepadNavFocusModule(int64_t moduleId) {
+	app::RackWidget* rack = rackWidget();
+	app::ModuleWidget* mw = rack ? rack->getModule(moduleId) : NULL;
+	if (!mw)
+		return;
+	// A module with nothing to focus (a blank panel) leaves the focus alone.
+	Focus first;
+	if (!firstItemOf(mw, first))
+		return;
+	g_cabling = false;
+	setFocus(first);
+}
+
+
+/** The focused module's own menu: Rack builds it, and RackDroid shows a Rack
+menu as a bottom sheet the D-pad can walk. */
+static void openModuleMenu() {
+	app::RackWidget* rack = rackWidget();
+	app::ModuleWidget* mw = rack ? rack->getModule(g_focus.moduleId) : NULL;
+	if (!mw) {
+		showToast("Move the focus to a module first");
+		return;
+	}
+	menuExpectModuleMenu(g_focus.moduleId);
+	mw->createContextMenu();
 }
 
 
@@ -867,6 +926,11 @@ void gamepadNavStep() {
 	}
 	if (g_cabling && !widgetOf(g_cableFrom))
 		g_cabling = false;
+
+	switch (g_command.exchange(CMD_NONE)) {
+		case CMD_MODULE_MENU: openModuleMenu(); break;
+		default: break;
+	}
 
 	if (g_dirHeld >= 0 && now >= g_repeatAt) {
 		bool editing = g_editing && g_focus.kind == FOCUS_PARAM;
@@ -1065,3 +1129,11 @@ void installGamepadNav() {
 
 
 } // namespace rackdroid
+
+
+#if defined(__ANDROID__)
+extern "C" JNIEXPORT void JNICALL
+Java_org_rackdroid_MainActivity_nativeGamepadCommand(JNIEnv*, jobject, jint command) {
+	rackdroid::g_command.store((int) command);
+}
+#endif

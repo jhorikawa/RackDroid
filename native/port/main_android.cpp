@@ -481,6 +481,10 @@ static void handleCmdInner(RackDroidApp* rd, int32_t cmd) {
 		LOGI("App: %s", what);
 	if (cmd == APP_CMD_INIT_WINDOW || cmd == APP_CMD_RESUME)
 		rackdroid::adpfKick();
+	// A dialog or a bottom sheet took the keys: the controller's releases will
+	// go to it, so nothing may be left held here.
+	if (cmd == APP_CMD_LOST_FOCUS)
+		rackdroid::gamepadInputReset();
 	switch (cmd) {
 		case APP_CMD_INIT_WINDOW:
 			rd->startRack();
