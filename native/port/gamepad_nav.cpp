@@ -9,8 +9,9 @@
  *   A            knob: edit (D-pad up/down coarse, left/right fine)
  *                switch: step it; a momentary button is held while A is held
  *                jack: start a cable, then A on another jack to connect
- *   B            leave edit / cancel the cable / unplug the focused jack
- *   Y            reset the focused knob to its default
+ *   B            back: leave edit, cancel the cable, and with nothing left to
+ *                back out of, put the focus ring away
+ *   Y            clear: reset the focused knob, unplug the focused jack
  *   right stick  turn the focused knob directly
  *   left stick   pan the rack
  *   L2 / R2      zoom out / in
@@ -580,17 +581,26 @@ static void pressB() {
 		closeHistory();
 		return;
 	}
-	if (g_active && g_focus.isPort()) {
-		app::PortWidget* port = portOf(g_focus);
-		if (port)
-			unplug(port);
-	}
+	// Nothing left to back out of: the ring goes away. The focus itself is
+	// kept, so the D-pad brings it back where it was.
+	releaseMomentary();
+	closeHistory();
+	g_dirHeld = -1;
+	g_follow = false;
+	g_active = false;
 }
 
 
 static void pressY() {
 	if (!ensureFocus())
 		return;
+	if (g_focus.isPort()) {
+		// Not while a cable is being run from here: B cancels that.
+		app::PortWidget* port = g_cabling ? NULL : portOf(g_focus);
+		if (port)
+			unplug(port);
+		return;
+	}
 	app::ParamWidget* pw = paramOf(g_focus);
 	if (!pw)
 		return;
@@ -640,47 +650,57 @@ void gamepadNavButton(int button, bool down) {
 	if (!APP || !APP->scene || !APP->scene->rack)
 		return;
 	windowNoteInteraction();
-	bool wasActive = g_active;
-	g_active = true;
+	bool isDir = button == PAD_UP || button == PAD_DOWN || button == PAD_LEFT || button == PAD_RIGHT;
 
-	if (button == PAD_UP || button == PAD_DOWN || button == PAD_LEFT || button == PAD_RIGHT) {
-		if (down) {
-			g_dirHeld = button;
-			g_repeatAt = system::getTime() + REPEAT_DELAY;
-			pressDirection(button);
-		}
-		else if (g_dirHeld == button) {
+	if (!down) {
+		if (isDir && g_dirHeld == button)
 			g_dirHeld = -1;
-		}
-		return;
-	}
-	if (button == PAD_A) {
-		if (down)
-			pressA();
-		else
+		if (button == PAD_A)
 			releaseMomentary();
 		return;
 	}
-	if (!down)
-		return;
+
+	// Buttons that have nothing to do with the focus work whether or not the
+	// ring is showing, and do not bring it out.
 	if (button == PAD_R3) {
 		g_playMode = !g_playMode;
 		g_modeChanged = system::getTime();
-		g_active = wasActive;
 		LOGI("play mode %s", g_playMode ? "on" : "off");
 		return;
 	}
-	// The first press after a finger had the screen only brings the ring back.
-	if (!wasActive && !widgetOf(g_focus)) {
+	if (button == PAD_SELECT) {
+		cycleZoom();
+		return;
+	}
+
+	if (!g_active) {
+		// The ring is put away. B leaves it so; any other button brings it
+		// back, and does only that -- acting on a control nobody can see
+		// would be a surprise.
+		if (button == PAD_B)
+			return;
+		g_active = true;
+		if (isDir) {
+			g_dirHeld = button;
+			g_repeatAt = system::getTime() + REPEAT_DELAY;
+		}
 		ensureFocus();
+		g_follow = true;
+		return;
+	}
+
+	if (isDir) {
+		g_dirHeld = button;
+		g_repeatAt = system::getTime() + REPEAT_DELAY;
+		pressDirection(button);
 		return;
 	}
 	switch (button) {
+		case PAD_A: pressA(); break;
 		case PAD_B: pressB(); break;
 		case PAD_Y: pressY(); break;
-		case PAD_L1: ensureFocus(); stepModule(-1); break;
-		case PAD_R1: ensureFocus(); stepModule(1); break;
-		case PAD_SELECT: cycleZoom(); break;
+		case PAD_L1: if (ensureFocus()) stepModule(-1); break;
+		case PAD_R1: if (ensureFocus()) stepModule(1); break;
 		default: break;
 	}
 }
