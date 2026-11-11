@@ -162,8 +162,12 @@ bool gamepadSeen() {
 
 
 void gamepadInputReset() {
+	// Not through setButton: a release reported to the navigation is acted
+	// on (a shoulder button steps to the next module when let go), and none
+	// of these buttons was let go.
+	gamepadNavCancelHeld();
 	for (int i = 0; i < PAD_BUTTONS; i++)
-		setButton(i, false);
+		g_button[i] = false;
 	for (int i = 0; i < 4; i++)
 		g_hat[i] = false;
 	for (int i = 0; i < PAD_AXES; i++)

@@ -19,7 +19,10 @@
  *                instead (see gamepad_midi.cpp). Only the right stick changes
  *                hands -- a knob can still be edited with A and the D-pad,
  *                while nothing else can pan.
- *   L1 / R1      previous / next module
+ *   L1 / R1      tapped: previous / next module
+ *                held, with the D-pad: carry the focused module (left/right
+ *                change places with the neighbour, up/down change row);
+ *                letting go sets it down
  *   SELECT       cycle the zoom
  *   X            add a module; it arrives ready to be moved: left/right change
  *                places with the neighbour, up/down change row, A sets it
@@ -156,6 +159,11 @@ static std::atomic<int> g_command{CMD_NONE};
 /** A module is being carried by the D-pad. */
 static bool g_moving = false;
 static int64_t g_moveId = -1;
+/** L1 or R1 is down (which one, or -1), and whether the D-pad has been used
+with it. A shoulder button acts when it is let go: used with the D-pad it was
+a grip on the module, and on its own it was a tap. */
+static int g_shoulderHeld = -1;
+static bool g_shoulderUsed = false;
 
 
 // --- lookups ----------------------------------------------------------------
@@ -837,6 +845,17 @@ void gamepadNavButton(int button, bool down) {
 			g_dirHeld = -1;
 		if (button == PAD_A)
 			releaseMomentary();
+		if (button == g_shoulderHeld) {
+			g_shoulderHeld = -1;
+			if (g_shoulderUsed) {
+				// It was a grip: the module is set down where it is.
+				if (g_moving)
+					endMove(true);
+			}
+			else if (g_active && !g_moving && ensureFocus()) {
+				stepModule(button == PAD_L1 ? -1 : 1);
+			}
+		}
 		return;
 	}
 
@@ -864,6 +883,15 @@ void gamepadNavButton(int button, bool down) {
 		showGamepadMenu(button == PAD_X ? 1 : 0);
 		gamepadInputReset();
 		return;
+	}
+
+	if (g_shoulderHeld >= 0 && isDir && g_active && !g_moving) {
+		// A shoulder button held and the D-pad pressed: pick the focused
+		// module up, with no menu and no mode to leave afterwards.
+		if (rackWidget()->getModule(g_focus.moduleId)) {
+			beginMove(g_focus.moduleId);
+			g_shoulderUsed = true;
+		}
 	}
 
 	if (g_moving) {
@@ -907,10 +935,22 @@ void gamepadNavButton(int button, bool down) {
 		case PAD_A: pressA(); break;
 		case PAD_B: pressB(); break;
 		case PAD_Y: pressY(); break;
-		case PAD_L1: if (ensureFocus()) stepModule(-1); break;
-		case PAD_R1: if (ensureFocus()) stepModule(1); break;
+		case PAD_L1:
+		case PAD_R1:
+			// Decided when it is let go: see g_shoulderHeld.
+			g_shoulderHeld = button;
+			g_shoulderUsed = false;
+			break;
 		default: break;
 	}
+}
+
+
+void gamepadNavCancelHeld() {
+	g_dirHeld = -1;
+	g_shoulderHeld = -1;
+	g_shoulderUsed = false;
+	releaseMomentary();
 }
 
 
@@ -1305,7 +1345,9 @@ struct GamepadOverlay : widget::Widget {
 	void drawMoving(const DrawArgs& args, app::ModuleWidget* mw) {
 		drawFrame(args, mw, RING_MOVE, 3.f, 0x26);
 		std::string name = mw->model ? mw->model->name : "module";
-		drawStrip(args, "MOVE:  " + name + "   -   D-pad moves, A places, B puts back", RING_MOVE);
+		drawStrip(args, g_shoulderHeld >= 0
+			? "MOVE:  " + name + "   -   let go to set it down"
+			: "MOVE:  " + name + "   -   D-pad moves, A places, B puts back", RING_MOVE);
 	}
 
 	void draw(const DrawArgs& args) override {
@@ -1330,7 +1372,16 @@ struct GamepadOverlay : widget::Widget {
 		// Which module the focused control belongs to. "Move module" and
 		// "Module menu" act on it, and a ring on one small knob does not say
 		// which panel that is.
-		if (app::ModuleWidget* owner = rackWidget()->getModule(g_focus.moduleId))
+		app::ModuleWidget* owner = rackWidget()->getModule(g_focus.moduleId);
+		if (owner && g_shoulderHeld >= 0) {
+			// L1/R1 is down: say what the D-pad would do now.
+			drawFrame(args, owner, RING_MOVE, 2.2f, 0);
+			std::string name = owner->model ? owner->model->name : "module";
+			drawStrip(args, "D-pad moves " + name + "   -   let go to set it down", RING_MOVE);
+			widget::Widget::draw(args);
+			return;
+		}
+		if (owner)
 			drawFrame(args, owner, nvgTransRGBA(RING, 0x90), 1.2f, 0);
 		if (g_cabling) {
 			widget::Widget* from = widgetOf(g_cableFrom);

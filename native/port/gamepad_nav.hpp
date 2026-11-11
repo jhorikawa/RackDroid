@@ -20,6 +20,10 @@ void installGamepadNav();
 /** A finger took over: the ring steps out of the way until the next button. */
 void gamepadNavNoteTouch();
 
+/** Another window took the keys: nothing is held any more, and nothing that
+acts on release (a shoulder button's tap) fires for a release that never came. */
+void gamepadNavCancelHeld();
+
 /** A module was just added: the focus goes to it, so what follows a pick from
 the controller's module menu is on the new module. */
 void gamepadNavFocusModule(int64_t moduleId);
