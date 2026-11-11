@@ -57,6 +57,8 @@
 #include "label_overlay.hpp"
 #include "cable_park.hpp"
 #include "selection_glow.hpp"
+#include "gamepad_input.hpp"
+#include "gamepad_nav.hpp"
 #include "tour_demo.hpp"
 #include "engine_barrier.hpp"
 #include "thread_choice.hpp"
@@ -395,6 +397,7 @@ struct RackDroidApp {
 				rackdroid::windowInstallDrawMarkers();
 				rackdroid::installCableParkBar();
 				rackdroid::installSelectionGlow();
+				rackdroid::installGamepadNav();
 				patchLaunched = true;
 				LOGI("Patch launched: %s", APP->patch->path.c_str());
 				// Every plugin is registered and the patch is up: Java can now
@@ -542,7 +545,14 @@ static int32_t handleInput(android_app* app, AInputEvent* event) {
 		return 0;
 	int prev = rackdroid::windowPhase();
 	rackdroid::windowSetPhase(rackdroid::RENDER_INPUT);
-	int handled = rackdroid::touchHandleEvent(event);
+	// A game controller first: its sticks send motion events too, and the
+	// touch code would take them for a finger.
+	int handled = rackdroid::gamepadHandleEvent(event);
+	if (!handled) {
+		if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION)
+			rackdroid::gamepadNavNoteTouch();
+		handled = rackdroid::touchHandleEvent(event);
+	}
 	rackdroid::windowSetPhase(prev);
 	return handled;
 }
@@ -3663,6 +3673,7 @@ void android_main(android_app* app) {
 				// show, or a restart the user would not see coming.
 				if (APP->window && rackdroid::windowHasSurface()) {
 					rackdroid::touchStep();
+					rackdroid::gamepadNavStep();
 					rackdroid::processTourDemo();
 					checkZoomCeiling();
 					checkMaxedOutOverload();
