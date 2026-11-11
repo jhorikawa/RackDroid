@@ -82,7 +82,10 @@ using namespace rack;
 namespace rackdroid {
 
 
-enum FocusKind { FOCUS_NONE = 0, FOCUS_PARAM, FOCUS_INPUT, FOCUS_OUTPUT };
+/** FOCUS_MODULE is the panel itself, for a module with no knob or jack to
+stand on (a notes panel, a blank): without it such a module could not be
+reached, and so not moved or deleted, from the controller. */
+enum FocusKind { FOCUS_NONE = 0, FOCUS_PARAM, FOCUS_INPUT, FOCUS_OUTPUT, FOCUS_MODULE };
 
 struct Focus {
 	int64_t moduleId = -1;
@@ -183,6 +186,8 @@ static app::PortWidget* portOf(const Focus& f) {
 static widget::Widget* widgetOf(const Focus& f) {
 	if (f.kind == FOCUS_PARAM)
 		return paramOf(f);
+	if (f.kind == FOCUS_MODULE)
+		return rackWidget() ? rackWidget()->getModule(f.moduleId) : NULL;
 	return portOf(f);
 }
 
@@ -202,6 +207,7 @@ static void collect(app::ModuleWidget* mw, std::vector<Item>& out) {
 	if (!mw || !mw->module)
 		return;
 	app::RackWidget* rack = rackWidget();
+	size_t before = out.size();
 	for (app::ParamWidget* pw : mw->getParams()) {
 		if (!pw->getParamQuantity() || !shownIn(pw, mw))
 			continue;
@@ -220,6 +226,15 @@ static void collect(app::ModuleWidget* mw, std::vector<Item>& out) {
 		it.focus.kind = port->type == engine::Port::INPUT ? FOCUS_INPUT : FOCUS_OUTPUT;
 		it.focus.id = port->portId;
 		it.pos = port->getRelativeOffset(port->box.size.mult(0.5f), rack);
+		out.push_back(it);
+	}
+	if (out.size() == before) {
+		// Nothing on the panel to stand on: the panel itself.
+		Item it;
+		it.focus.moduleId = mw->module->id;
+		it.focus.kind = FOCUS_MODULE;
+		it.focus.id = 0;
+		it.pos = mw->getRelativeOffset(mw->box.size.mult(0.5f), rack);
 		out.push_back(it);
 	}
 }
@@ -704,6 +719,12 @@ static void unplug(app::PortWidget* port) {
 static void pressA() {
 	if (!ensureFocus())
 		return;
+	if (g_focus.kind == FOCUS_MODULE) {
+		// The panel has nothing to edit or patch; what A can do with it is
+		// pick it up.
+		beginMove(g_focus.moduleId);
+		return;
+	}
 	if (g_focus.kind == FOCUS_PARAM) {
 		app::ParamWidget* pw = paramOf(g_focus);
 		if (isSwitch(pw)) {
@@ -750,6 +771,8 @@ static void pressB() {
 
 static void pressY() {
 	if (!ensureFocus())
+		return;
+	if (g_focus.kind == FOCUS_MODULE)
 		return;
 	if (g_focus.isPort()) {
 		// Not while a cable is being run from here: B cancels that.
@@ -1150,6 +1173,9 @@ static std::string describe(const Focus& f) {
 				text += "   " + value;
 		}
 	}
+	else if (f.kind == FOCUS_MODULE) {
+		text += "   -   A to move";
+	}
 	else if (f.isPort()) {
 		app::PortWidget* port = portOf(f);
 		engine::PortInfo* info = port ? port->getPortInfo() : NULL;
@@ -1256,21 +1282,28 @@ struct GamepadOverlay : widget::Widget {
 		nvgText(args.vg, x + 10.f, y + h * 0.5f, text.c_str(), NULL);
 	}
 
+	/** A frame round a whole panel. */
+	void drawFrame(const DrawArgs& args, widget::Widget* panel, NVGcolor col, float width, int fillAlpha) {
+		math::Vec o = panel->getAbsoluteOffset(math::Vec(0.f, 0.f));
+		math::Vec e = panel->getAbsoluteOffset(panel->box.size);
+		nvgBeginPath(args.vg);
+		nvgRoundedRect(args.vg, o.x - 2.f, o.y - 2.f, e.x - o.x + 4.f, e.y - o.y + 4.f, 5.f);
+		if (fillAlpha > 0) {
+			nvgFillColor(args.vg, nvgTransRGBA(col, fillAlpha));
+			nvgFill(args.vg);
+		}
+		nvgStrokeColor(args.vg, nvgRGBA(0, 0, 0, 0xB0));
+		nvgStrokeWidth(args.vg, width + 2.f);
+		nvgStroke(args.vg);
+		nvgStrokeColor(args.vg, col);
+		nvgStrokeWidth(args.vg, width);
+		nvgStroke(args.vg);
+	}
+
 	/** The module being carried: a frame round the whole panel, and what the
 	buttons do while it is up. */
 	void drawMoving(const DrawArgs& args, app::ModuleWidget* mw) {
-		math::Vec o = mw->getAbsoluteOffset(math::Vec(0.f, 0.f));
-		math::Vec e = mw->getAbsoluteOffset(mw->box.size);
-		nvgBeginPath(args.vg);
-		nvgRoundedRect(args.vg, o.x - 2.f, o.y - 2.f, e.x - o.x + 4.f, e.y - o.y + 4.f, 5.f);
-		nvgFillColor(args.vg, nvgTransRGBA(RING_MOVE, 0x26));
-		nvgFill(args.vg);
-		nvgStrokeColor(args.vg, nvgRGBA(0, 0, 0, 0xB0));
-		nvgStrokeWidth(args.vg, 5.f);
-		nvgStroke(args.vg);
-		nvgStrokeColor(args.vg, RING_MOVE);
-		nvgStrokeWidth(args.vg, 3.f);
-		nvgStroke(args.vg);
+		drawFrame(args, mw, RING_MOVE, 3.f, 0x26);
 		std::string name = mw->model ? mw->model->name : "module";
 		drawStrip(args, "MOVE:  " + name + "   -   D-pad moves, A places, B puts back", RING_MOVE);
 	}
@@ -1288,6 +1321,17 @@ struct GamepadOverlay : widget::Widget {
 			return;
 		}
 		NVGcolor col = g_cabling ? RING_CABLE : (g_editing || g_momentary) ? RING_EDIT : RING;
+		if (g_focus.kind == FOCUS_MODULE) {
+			drawFrame(args, w, RING, 2.2f, 0);
+			drawStrip(args, describe(g_focus), RING);
+			widget::Widget::draw(args);
+			return;
+		}
+		// Which module the focused control belongs to. "Move module" and
+		// "Module menu" act on it, and a ring on one small knob does not say
+		// which panel that is.
+		if (app::ModuleWidget* owner = rackWidget()->getModule(g_focus.moduleId))
+			drawFrame(args, owner, nvgTransRGBA(RING, 0x90), 1.2f, 0);
 		if (g_cabling) {
 			widget::Widget* from = widgetOf(g_cableFrom);
 			if (from) {
