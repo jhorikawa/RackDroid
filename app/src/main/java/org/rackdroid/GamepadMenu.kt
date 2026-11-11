@@ -159,9 +159,29 @@ class GamepadMenu(
 			.setTitle(title)
 			.setItems(labels.toTypedArray()) { _, i -> onPick(i) }
 			.create()
+		// A release only counts if this dialog saw the press. The button that
+		// opened the menu is still down when the menu appears, and its release
+		// arrives here: taken at face value, letting go of START closed the
+		// menu that pressing it had opened.
+		val pressedHere = HashSet<Int>()
 		dialog.setOnKeyListener { _, keyCode, event ->
 			val lv = dialog.listView
 			val down = event.action == KeyEvent.ACTION_DOWN
+			val ours = keyCode == KeyEvent.KEYCODE_BUTTON_A || keyCode == KeyEvent.KEYCODE_BUTTON_B ||
+				keyCode == KeyEvent.KEYCODE_BUTTON_START || keyCode == KeyEvent.KEYCODE_BUTTON_X ||
+				keyCode == KeyEvent.KEYCODE_BUTTON_L1 || keyCode == KeyEvent.KEYCODE_BUTTON_R1
+			if (ours) {
+				if (down) {
+					// A held button repeats; only its first press is a press.
+					if (event.repeatCount == 0)
+						pressedHere.add(keyCode)
+					else if (keyCode !in pressedHere)
+						return@setOnKeyListener true
+				}
+				else if (!pressedHere.remove(keyCode)) {
+					return@setOnKeyListener true
+				}
+			}
 			when (keyCode) {
 				KeyEvent.KEYCODE_BUTTON_A -> {
 					// On release, as a tap is: the next dialog must not open
