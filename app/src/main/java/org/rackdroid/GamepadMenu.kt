@@ -55,6 +55,8 @@ class GamepadMenu(
 	private val command: (Int) -> Unit,
 	/** The toolbar's buttons, in toolbar order. */
 	private val tools: () -> List<View>,
+	/** Shows or hides the touch pad (XyPad.kt). */
+	private val toggleXyPad: () -> Unit,
 ) {
 	companion object {
 		const val MAIN = 0
@@ -88,6 +90,7 @@ class GamepadMenu(
 		private const val LINE_NOISE = "M2,12 L4,6 L6,17 L8,9 L10,19 L12,4 L14,15 L16,8 L18,18 L20,10 L22,13"
 		private const val LINE_QNT = "M2,20 H6 V15 H11 V10 H16 V5 H22"
 		private const val LINE_MIDI = "M12,3 A9,9 0 1 0 12.01,3 M7,13 h0.01 M17,13 h0.01 M8.6,8.6 h0.01 M15.4,8.6 h0.01 M12,7 h0.01"
+		private const val LINE_XY = "M4,4 H20 V20 H4 Z M4,14 H20 M10,4 V20 M10,14 h0.01"
 		private const val LINE_MISC = "M5,12 h0.01 M12,12 h0.01 M19,12 h0.01"
 	}
 
@@ -183,6 +186,7 @@ class GamepadMenu(
 			Row("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
 			Row("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
 			Row("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
+			Row("XY pad", line(LINE_XY)) to { toggleXyPad() },
 			Row("Undo", res(R.drawable.ic_tb_undo)) to { history(0) },
 			Row("Redo", res(R.drawable.ic_tb_redo)) to { history(1) },
 			Row("File…", fill(FILL_FILE)) to { openRackMenu(0) },

@@ -63,6 +63,7 @@ static jmethodID midLanguageChanged;
 static jmethodID midThermalStatus;
 static jmethodID midShowToast;
 static jmethodID midShowGamepadMenu;
+static jmethodID midSetTiltWanted;
 static jmethodID midShowEngineNotice;
 static jmethodID midRequestAudioFocus;
 
@@ -187,6 +188,9 @@ void jniInit(ANativeActivity* activity) {
 	if (env->ExceptionCheck())
 		env->ExceptionClear();
 	midShowGamepadMenu = env->GetMethodID(activityCls, "showGamepadMenuFromNative", "(I)V");
+	if (env->ExceptionCheck())
+		env->ExceptionClear();
+	midSetTiltWanted = env->GetMethodID(activityCls, "setTiltWantedFromNative", "(Z)V");
 	if (env->ExceptionCheck())
 		env->ExceptionClear();
 	midShowEngineNotice = env->GetMethodID(activityCls, "showEngineNoticeFromNative", "(I)V");
@@ -438,6 +442,16 @@ void showToast(const std::string& text) {
 	env->DeleteLocalRef(js);
 	if (env->ExceptionCheck())
 		logAndClearException("showToast");
+}
+
+
+void setTiltWanted(bool on) {
+	JNIEnv* env = getEnv();
+	if (!env || !midSetTiltWanted)
+		return;
+	env->CallVoidMethod(activityObj, midSetTiltWanted, (jboolean) on);
+	if (env->ExceptionCheck())
+		logAndClearException("setTiltWanted");
 }
 
 

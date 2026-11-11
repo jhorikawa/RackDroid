@@ -16,7 +16,8 @@
  *   left stick   pan the rack
  *   L2 / R2      zoom out / in
  *   R3           play mode: the right stick becomes two voltages for the patch
- *                instead (see gamepad_midi.cpp). Only the right stick changes
+ *                instead, and the device's tilt two more (see
+ *                gamepad_midi.cpp). Only the right stick changes
  *                hands -- a knob can still be edited with A and the D-pad,
  *                while nothing else can pan.
  *   L1 / R1      tapped: previous / next module
@@ -867,6 +868,9 @@ void gamepadNavButton(int button, bool down) {
 	if (button == PAD_R3) {
 		g_playMode = !g_playMode;
 		g_modeChanged = system::getTime();
+		// The tilt sensor runs only while playing, and takes the pose the
+		// device is held in at this moment as its centre.
+		setTiltWanted(g_playMode);
 		LOGI("play mode %s", g_playMode ? "on" : "off");
 		return;
 	}
@@ -1311,7 +1315,7 @@ struct GamepadOverlay : widget::Widget {
 		if (!APP->window->uiFont)
 			return;
 		std::string text = !fresh ? "PLAY"
-			: g_playMode ? "PLAY:  right stick = CV"
+			: g_playMode ? "PLAY:  right stick + tilt = CV"
 			: "EDIT:  right stick turns the knob";
 		NVGcolor accent = g_playMode ? nvgRGB(0x8D, 0xE0, 0x7A) : RING;
 		nvgFontFaceId(args.vg, APP->window->uiFont->handle);

@@ -105,6 +105,10 @@ void showToast(const std::string& text);
 menu, 1 the module picker. */
 void showGamepadMenu(int which);
 
+/** Starts or stops the tilt sensor (TiltSensor.kt). Its readings come back
+through nativeGamepadTilt in gamepad_midi.cpp. */
+void setTiltWanted(bool on);
+
 /** Same idea, for the two notices the engine itself can raise: native has
 no Android string resources of its own, so this passes a kind rather than
 text, and Java resolves + localizes it (0 = engine_maxed_out, 1 =

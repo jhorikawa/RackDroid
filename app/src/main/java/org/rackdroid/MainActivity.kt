@@ -1156,6 +1156,13 @@ class MainActivity : NativeActivity() {
 		// off-screen never delivers a touch-up event -- would sustain
 		// forever.
 		pianoView?.releaseAll()
+		xyPad.release()
+		tiltSensor.pause()
+	}
+
+	override fun onResume() {
+		super.onResume()
+		tiltSensor.resume()
 	}
 
 	/** On-device log viewer: tails of user/java-log.txt (UI thread) and Rack's
@@ -1912,7 +1919,29 @@ class MainActivity : NativeActivity() {
 			openRackMenu = { nativeToolbarTap(it) },
 			history = { nativeHistoryAction(it) },
 			command = { nativeGamepadCommand(it) },
-			tools = { gamepadTools })
+			tools = { gamepadTools },
+			toggleXyPad = { xyPad.toggle() })
+	}
+
+	/** The handheld's tilt and a touch pad, as voltages for the patch
+	 * (gamepad_midi.cpp). */
+	private val tiltSensor by lazy { TiltSensor(this) { x, y -> nativeGamepadTilt(x, y) } }
+	private val xyPad by lazy {
+		XyPad(this,
+			bottomClearance = { modulePalette.bounds()?.let { window.decorView.height - it.top } ?: 0 },
+			onPad = { x, y, down -> nativeGamepadPad(x, y, down) })
+	}
+
+	/** Called from native (render thread) when play mode changes: the tilt
+	 * sensor only runs while something can be listening to it. */
+	fun setTiltWantedFromNative(on: Boolean) {
+		uiHandler.post {
+			try {
+				tiltSensor.setWanted(on)
+			} catch (t: Throwable) {
+				jlog("setTiltWanted FAILED: ${android.util.Log.getStackTraceString(t)}")
+			}
+		}
 	}
 
 	/** Called from native (render thread) when START (0) or X (1) is pressed
@@ -3046,6 +3075,8 @@ class MainActivity : NativeActivity() {
 	private external fun nativeBackPressed()
 	private external fun nativeToolbarTap(index: Int)
 	private external fun nativeGamepadCommand(command: Int)
+	private external fun nativeGamepadTilt(x: Float, y: Float)
+	private external fun nativeGamepadPad(x: Float, y: Float, down: Boolean)
 	private external fun nativeBrowserModelsJson(): String
 	private external fun nativeBrowserModelsGeneration(): Long
 	private external fun nativeBrowserChooseAt(key: String, x: Float, y: Float)

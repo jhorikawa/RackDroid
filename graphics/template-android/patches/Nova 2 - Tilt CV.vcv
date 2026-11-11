@@ -1,0 +1,238 @@
+{
+ "version": "2.6.4",
+ "masterModuleId": 8518972980240757,
+ "modules": [
+  {
+   "id": 1,
+   "plugin": "Core",
+   "model": "Notes",
+   "version": "2.0.0",
+   "pos": [
+    0,
+    0
+   ],
+   "params": [],
+   "data": {
+    "text": "NOVA: TILT CV\n\n1. Hold the Nova the way you\n   like, then press R3:\n   PLAY mode. That pose is\n   the centre.\n2. Tip it left/right: filter\n3. Tip it away/toward you:\n   pitch\n\nPress R3 twice to set a new\ncentre. Tilt is off outside\nPLAY mode."
+   }
+  },
+  {
+   "id": 2,
+   "plugin": "Core",
+   "model": "MIDICCToCVInterface",
+   "version": "2.0.0",
+   "pos": [
+    16,
+    0
+   ],
+   "params": [],
+   "data": {
+    "ccs": [
+     21,
+     22,
+     2,
+     3,
+     15,
+     0,
+     1,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12
+    ],
+    "midi": {
+     "driver": -10,
+     "deviceName": "Built-in controller",
+     "channel": -1
+    },
+    "smooth": true,
+    "mpeMode": false,
+    "lsbMode": false
+   }
+  },
+  {
+   "id": 3,
+   "plugin": "Fundamental",
+   "model": "VCO",
+   "version": "2.6.4",
+   "pos": [
+    24,
+    0
+   ],
+   "params": [
+    {
+     "id": 0,
+     "value": 0
+    },
+    {
+     "id": 1,
+     "value": 0
+    },
+    {
+     "id": 2,
+     "value": 0.0
+    },
+    {
+     "id": 3,
+     "value": 0
+    },
+    {
+     "id": 4,
+     "value": 0.1
+    },
+    {
+     "id": 5,
+     "value": 0.5
+    },
+    {
+     "id": 6,
+     "value": 0
+    },
+    {
+     "id": 7,
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "plugin": "Fundamental",
+   "model": "VCF",
+   "version": "2.6.4",
+   "pos": [
+    38,
+    0
+   ],
+   "params": [
+    {
+     "id": 0,
+     "value": 0.5
+    },
+    {
+     "id": 1,
+     "value": 0
+    },
+    {
+     "id": 2,
+     "value": 0.45
+    },
+    {
+     "id": 3,
+     "value": 0.6
+    },
+    {
+     "id": 4,
+     "value": 0.5
+    },
+    {
+     "id": 5,
+     "value": 0
+    },
+    {
+     "id": 6,
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "plugin": "Fundamental",
+   "model": "VCA-1",
+   "version": "2.6.4",
+   "pos": [
+    48,
+    0
+   ],
+   "params": [
+    {
+     "id": 0,
+     "value": 0.55
+    },
+    {
+     "id": 1,
+     "value": 0
+    }
+   ]
+  },
+  {
+   "id": 8518972980240757,
+   "plugin": "Core",
+   "model": "AudioInterface2",
+   "version": "2.0.0",
+   "pos": [
+    56,
+    0
+   ],
+   "params": [
+    {
+     "value": 1.0,
+     "id": 0
+    }
+   ],
+   "data": {
+    "audio": {
+     "driver": 777,
+     "deviceName": "Default",
+     "inputOffset": 0,
+     "outputOffset": 0
+    },
+    "dcFilter": true
+   }
+  }
+ ],
+ "cables": [
+  {
+   "id": 1,
+   "outputModuleId": 2,
+   "outputId": 0,
+   "inputModuleId": 4,
+   "inputId": 0,
+   "color": "#f3c63a"
+  },
+  {
+   "id": 2,
+   "outputModuleId": 2,
+   "outputId": 1,
+   "inputModuleId": 3,
+   "inputId": 1,
+   "color": "#8b4ade"
+  },
+  {
+   "id": 4,
+   "outputModuleId": 3,
+   "outputId": 2,
+   "inputModuleId": 4,
+   "inputId": 3,
+   "color": "#00b56e"
+  },
+  {
+   "id": 5,
+   "outputModuleId": 4,
+   "outputId": 0,
+   "inputModuleId": 5,
+   "inputId": 1,
+   "color": "#0986ad"
+  },
+  {
+   "id": 6,
+   "outputModuleId": 5,
+   "outputId": 0,
+   "inputModuleId": 8518972980240757,
+   "inputId": 0,
+   "color": "#f3374b"
+  },
+  {
+   "id": 7,
+   "outputModuleId": 5,
+   "outputId": 0,
+   "inputModuleId": 8518972980240757,
+   "inputId": 1,
+   "color": "#f3374b"
+  }
+ ]
+}
