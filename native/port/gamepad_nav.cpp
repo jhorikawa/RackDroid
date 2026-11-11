@@ -21,7 +21,9 @@
  *                while nothing else can pan.
  *   L1 / R1      previous / next module
  *   SELECT       cycle the zoom
- *   X            add a module
+ *   X            add a module; it arrives ready to be moved: left/right change
+ *                places with the neighbour, up/down change row, A sets it
+ *                down, B puts it back
  *   START        main menu (GamepadMenu.kt): the Rack menus, undo/redo, the
  *                toolbar's tools, the focused module's own menu
  *
@@ -145,8 +147,12 @@ static const float ZOOM_LEVELS[] = {1.f, 2.f, 0.5f};
 
 /** Asked for from GamepadMenu.kt on the UI thread, carried out here on the
 render thread. Matches the constants there. */
-enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1 };
+enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1, CMD_MOVE_MODULE = 2 };
 static std::atomic<int> g_command{CMD_NONE};
+
+/** A module is being carried by the D-pad. */
+static bool g_moving = false;
+static int64_t g_moveId = -1;
 
 
 // --- lookups ----------------------------------------------------------------
@@ -470,6 +476,136 @@ static void stepModule(int delta) {
 }
 
 
+// --- moving a module --------------------------------------------------------
+
+/** Every step of a move, to be one undo step when the module is set down --
+or to be taken back at once if it is put back instead. */
+static history::ComplexAction* g_moveHistory = NULL;
+/** Columns a module travels per press across empty rack. */
+static const float FREE_STEP_HP = 4.f;
+
+
+static app::ModuleWidget* movingModule() {
+	return g_moving && rackWidget() ? rackWidget()->getModule(g_moveId) : NULL;
+}
+
+
+static void beginMove(int64_t moduleId) {
+	app::RackWidget* rack = rackWidget();
+	app::ModuleWidget* mw = rack ? rack->getModule(moduleId) : NULL;
+	if (!mw)
+		return;
+	releaseMomentary();
+	closeHistory();
+	g_editing = false;
+	g_cabling = false;
+	delete g_moveHistory;
+	g_moveHistory = new history::ComplexAction;
+	g_moveHistory->name = "move module";
+	g_moving = true;
+	g_moveId = moduleId;
+	g_follow = true;
+}
+
+
+static void endMove(bool keep) {
+	g_moving = false;
+	g_dirHeld = -1;
+	g_follow = true;
+	history::ComplexAction* h = g_moveHistory;
+	g_moveHistory = NULL;
+	if (!h)
+		return;
+	if (h->isEmpty()) {
+		delete h;
+		return;
+	}
+	if (keep) {
+		APP->history->push(h);
+		return;
+	}
+	// Put back: every step undone, last first, and nothing left to redo.
+	h->undo();
+	delete h;
+}
+
+
+/** The module's nearest neighbour on its row, to the left or the right. */
+static app::ModuleWidget* neighbourOf(app::ModuleWidget* mw, bool left) {
+	app::ModuleWidget* best = NULL;
+	for (app::ModuleWidget* other : rackWidget()->getModules()) {
+		if (other == mw || std::fabs(other->box.pos.y - mw->box.pos.y) > 1.f)
+			continue;
+		if (left) {
+			if (other->box.getRight() > mw->box.pos.x + 0.5f)
+				continue;
+			if (!best || other->box.getRight() > best->box.getRight())
+				best = other;
+		}
+		else {
+			if (other->box.pos.x < mw->box.getRight() - 0.5f)
+				continue;
+			if (!best || other->box.pos.x < best->box.pos.x)
+				best = other;
+		}
+	}
+	return best;
+}
+
+
+/** One press of the D-pad while a module is being carried.
+
+Left and right change places with the neighbour when there is one alongside,
+and travel a few columns at a time across empty rack, stopping against the
+next module. Rack's own squeeze cannot be fed a column at a time for this: it
+puts a module back until it is past the middle of its neighbour, so short
+steps would never get anywhere. Up and down go to the next row, where the
+modules already there make room. */
+static void moveStep(int button) {
+	app::RackWidget* rack = rackWidget();
+	app::ModuleWidget* mw = movingModule();
+	if (!rack || !mw || !g_moveHistory)
+		return;
+	// Each press is a small drag of its own: positions remembered, the
+	// move made, and what changed added to the one undo step.
+	rack->updateModuleOldPositions();
+	math::Vec pos = mw->box.pos;
+	const float hp = app::RACK_GRID_WIDTH;
+
+	if (button == PAD_UP || button == PAD_DOWN) {
+		pos.y += button == PAD_UP ? -app::RACK_GRID_HEIGHT : app::RACK_GRID_HEIGHT;
+		rack->setModulePosSqueeze(mw, pos);
+	}
+	else {
+		bool left = button == PAD_LEFT;
+		app::ModuleWidget* n = neighbourOf(mw, left);
+		float gap = !n ? INFINITY
+			: left ? mw->box.pos.x - n->box.getRight() : n->box.pos.x - mw->box.getRight();
+		if (n && gap < hp * 0.5f) {
+			// Side by side: change places. Squeezing whichever of the two
+			// ends up on the left into the other's place shoves that one
+			// along by exactly its width, leaving no hole behind.
+			if (left)
+				rack->setModulePosSqueeze(mw, n->box.pos);
+			else
+				rack->setModulePosSqueeze(n, mw->box.pos);
+		}
+		else {
+			float step = std::fmin(gap, FREE_STEP_HP * hp);
+			pos.x += left ? -step : step;
+			rack->requestModulePos(mw, pos);
+		}
+	}
+
+	history::ComplexAction* h = rack->getModuleDragAction();
+	if (h && !h->isEmpty())
+		g_moveHistory->push(h);
+	else
+		delete h;
+	g_follow = true;
+}
+
+
 // --- actions ----------------------------------------------------------------
 
 static bool isSwitch(app::ParamWidget* pw) {
@@ -694,6 +830,9 @@ void gamepadNavButton(int button, bool down) {
 		return;
 	}
 	if (button == PAD_START || button == PAD_X) {
+		// A module being carried is set down where it is first.
+		if (g_moving)
+			endMove(true);
 		// The menu is another window and takes the keys with it, this
 		// button's release included. Coming back from it the ring shows:
 		// the controller is plainly in use, and a module added from the
@@ -701,6 +840,21 @@ void gamepadNavButton(int button, bool down) {
 		g_active = true;
 		showGamepadMenu(button == PAD_X ? 1 : 0);
 		gamepadInputReset();
+		return;
+	}
+
+	if (g_moving) {
+		if (isDir) {
+			g_dirHeld = button;
+			g_repeatAt = system::getTime() + REPEAT_DELAY;
+			moveStep(button);
+		}
+		else if (button == PAD_A) {
+			endMove(true);
+		}
+		else if (button == PAD_B) {
+			endMove(false);
+		}
 		return;
 	}
 
@@ -748,11 +902,15 @@ void gamepadNavFocusModule(int64_t moduleId) {
 	if (!mw)
 		return;
 	// A module with nothing to focus (a blank panel) leaves the focus alone.
-	Focus first;
-	if (!firstItemOf(mw, first))
-		return;
 	g_cabling = false;
-	setFocus(first);
+	Focus first;
+	if (firstItemOf(mw, first))
+		setFocus(first);
+	// Added from the controller: where it landed is nobody's choice, so it
+	// arrives already picked up. Added by a finger, it was dropped where the
+	// finger wanted it.
+	if (g_active)
+		beginMove(moduleId);
 }
 
 
@@ -771,6 +929,9 @@ static void openModuleMenu() {
 
 
 void gamepadNavNoteTouch() {
+	// A finger on the screen sets a carried module down where it is.
+	if (g_moving)
+		endMove(true);
 	if (!g_active)
 		return;
 	g_active = false;
@@ -871,7 +1032,7 @@ static void panAndZoom(float dt) {
 static void followFocus(float dt) {
 	if (!g_follow || !g_active)
 		return;
-	widget::Widget* w = widgetOf(g_focus);
+	widget::Widget* w = g_moving ? (widget::Widget*) movingModule() : widgetOf(g_focus);
 	app::RackScrollWidget* rs = APP->scene->rackScroll;
 	if (!w || !rs) {
 		g_follow = false;
@@ -927,15 +1088,31 @@ void gamepadNavStep() {
 	if (g_cabling && !widgetOf(g_cableFrom))
 		g_cabling = false;
 
+	// The module being carried was deleted, or another patch loaded.
+	if (g_moving && !movingModule())
+		endMove(true);
+
 	switch (g_command.exchange(CMD_NONE)) {
 		case CMD_MODULE_MENU: openModuleMenu(); break;
+		case CMD_MOVE_MODULE:
+			if (rackWidget()->getModule(g_focus.moduleId)) {
+				g_active = true;
+				beginMove(g_focus.moduleId);
+			}
+			else {
+				showToast("Move the focus to a module first");
+			}
+			break;
 		default: break;
 	}
 
 	if (g_dirHeld >= 0 && now >= g_repeatAt) {
 		bool editing = g_editing && g_focus.kind == FOCUS_PARAM;
-		g_repeatAt = now + (editing ? REPEAT_EDIT : REPEAT_MOVE);
-		pressDirection(g_dirHeld);
+		g_repeatAt = now + (editing || g_moving ? REPEAT_EDIT : REPEAT_MOVE);
+		if (g_moving)
+			moveStep(g_dirHeld);
+		else
+			pressDirection(g_dirHeld);
 		windowNoteInteraction();
 	}
 
@@ -956,6 +1133,7 @@ void gamepadNavStep() {
 static const NVGcolor RING = nvgRGB(0xFF, 0xDA, 0x9F);
 static const NVGcolor RING_EDIT = nvgRGB(0xFF, 0x8A, 0x3D);
 static const NVGcolor RING_CABLE = nvgRGB(0x6F, 0xD6, 0xFF);
+static const NVGcolor RING_MOVE = nvgRGB(0x8D, 0xE0, 0x7A);
 
 
 static std::string describe(const Focus& f) {
@@ -1078,8 +1256,32 @@ struct GamepadOverlay : widget::Widget {
 		nvgText(args.vg, x + 10.f, y + h * 0.5f, text.c_str(), NULL);
 	}
 
+	/** The module being carried: a frame round the whole panel, and what the
+	buttons do while it is up. */
+	void drawMoving(const DrawArgs& args, app::ModuleWidget* mw) {
+		math::Vec o = mw->getAbsoluteOffset(math::Vec(0.f, 0.f));
+		math::Vec e = mw->getAbsoluteOffset(mw->box.size);
+		nvgBeginPath(args.vg);
+		nvgRoundedRect(args.vg, o.x - 2.f, o.y - 2.f, e.x - o.x + 4.f, e.y - o.y + 4.f, 5.f);
+		nvgFillColor(args.vg, nvgTransRGBA(RING_MOVE, 0x26));
+		nvgFill(args.vg);
+		nvgStrokeColor(args.vg, nvgRGBA(0, 0, 0, 0xB0));
+		nvgStrokeWidth(args.vg, 5.f);
+		nvgStroke(args.vg);
+		nvgStrokeColor(args.vg, RING_MOVE);
+		nvgStrokeWidth(args.vg, 3.f);
+		nvgStroke(args.vg);
+		std::string name = mw->model ? mw->model->name : "module";
+		drawStrip(args, "MOVE:  " + name + "   -   D-pad moves, A places, B puts back", RING_MOVE);
+	}
+
 	void draw(const DrawArgs& args) override {
 		drawMode(args);
+		if (app::ModuleWidget* moving = movingModule()) {
+			drawMoving(args, moving);
+			widget::Widget::draw(args);
+			return;
+		}
 		widget::Widget* w = g_active ? widgetOf(g_focus) : NULL;
 		if (!w) {
 			widget::Widget::draw(args);

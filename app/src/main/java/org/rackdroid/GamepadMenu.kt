@@ -62,6 +62,7 @@ class GamepadMenu(
 
 		/** Matches GamepadCommand in gamepad_nav.cpp. */
 		const val CMD_MODULE_MENU = 1
+		const val CMD_MOVE_MODULE = 2
 
 		// Icons as SVG path data on a 24 x 24 grid. The filled ones are
 		// Material Design icons (Apache 2.0), the family the toolbar's own
@@ -72,6 +73,7 @@ class GamepadMenu(
 		private const val FILL_VIEW = "M12,4.5C7,4.5 2.73,7.61 1,12c1.73,4.39 6,7.5 11,7.5s9.27,-3.11 11,-7.5c-1.73,-4.39 -6,-7.5 -11,-7.5zM12,17c-2.76,0 -5,-2.24 -5,-5s2.24,-5 5,-5 5,2.24 5,5 -2.24,5 -5,5zM12,9c-1.66,0 -3,1.34 -3,3s1.34,3 3,3 3,-1.34 3,-3 -1.34,-3 -3,-3z"
 		private const val FILL_ENGINE = "M15,9H9v6h6V9zM13,13h-2v-2h2v2zM21,11V9h-2V7c0,-1.1 -0.9,-2 -2,-2h-2V3h-2v2h-2V3H9v2H7c-1.1,0 -2,0.9 -2,2v2H3v2h2v2H3v2h2v2c0,1.1 0.9,2 2,2h2v2h2v-2h2v2h2v-2h2c1.1,0 2,-0.9 2,-2v-2h2v-2h-2v-2h2zM17,17H7V7h10v10z"
 		private const val FILL_HELP = "M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM13,19h-2v-2h2v2zM15.07,11.25l-0.9,0.92C13.45,12.9 13,13.5 13,15h-2v-0.5c0,-1.1 0.45,-2.1 1.17,-2.83l1.24,-1.26c0.37,-0.36 0.59,-0.86 0.59,-1.41 0,-1.1 -0.9,-2 -2,-2s-2,0.9 -2,2H8c0,-2.21 1.79,-4 4,-4s4,1.79 4,4c0,0.88 -0.36,1.68 -0.93,2.25z"
+		private const val FILL_MOVE = "M10,9h4V6h3l-5,-5 -5,5h3v3zM9,10H6V7l-5,5 5,5v-3h3v-4zM23,12l-5,-5v3h-3v4h3v3l5,-5zM14,15h-4v3H7l5,5 5,-5h-3v-3z"
 		private const val FILL_TOOLS = "M22.7,19l-9.1,-9.1c0.9,-2.3 0.4,-5 -1.5,-6.9 -2,-2 -5,-2.4 -7.4,-1.3L9,6 6,9 1.6,4.7C0.4,7.1 0.9,10.1 2.9,12.1c1.9,1.9 4.6,2.4 6.9,1.5l9.1,9.1c0.4,0.4 1,0.4 1.4,0l2.3,-2.3c0.5,-0.4 0.5,-1.1 0.1,-1.4z"
 
 		private const val LINE_VCO = "M2,12 C3.3,4 5.7,4 7,12 C8.3,20 10.7,20 12,12 C13.3,4 15.7,4 17,12 C18.3,20 20.7,20 22,12"
@@ -179,6 +181,7 @@ class GamepadMenu(
 	private fun showMain() {
 		val items = listOf<Pair<Row, () -> Unit>>(
 			Row("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
+			Row("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
 			Row("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
 			Row("Undo", res(R.drawable.ic_tb_undo)) to { history(0) },
 			Row("Redo", res(R.drawable.ic_tb_redo)) to { history(1) },
