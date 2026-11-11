@@ -18,4 +18,8 @@ void installGamepadNav();
 /** A finger took over: the ring steps out of the way until the next button. */
 void gamepadNavNoteTouch();
 
+/** Play mode: the left stick and the triggers are voltages for the patch
+(gamepad_midi.cpp) instead of panning and zooming the rack. L3 toggles it. */
+bool gamepadPlayMode();
+
 } // namespace rackdroid

@@ -14,6 +14,8 @@
  *   right stick  turn the focused knob directly
  *   left stick   pan the rack
  *   L2 / R2      zoom out / in
+ *   L3           play mode: the left stick and the triggers become voltages
+ *                for the patch instead (see gamepad_midi.cpp)
  *   L1 / R1      previous / next module
  *   SELECT       cycle the zoom
  *
@@ -104,6 +106,9 @@ static bool g_follow = false;
 /** The left stick or the triggers moved the view since the focus last moved,
 so the focus may have been left behind off screen. */
 static bool g_viewMoved = false;
+static bool g_playMode = false;
+/** When the mode last changed, to say so on screen for a moment. */
+static double g_modeChanged = -1e9;
 
 static int g_dirHeld = -1;
 static double g_repeatAt = 0.0;
@@ -656,6 +661,13 @@ void gamepadNavButton(int button, bool down) {
 	}
 	if (!down)
 		return;
+	if (button == PAD_L3) {
+		g_playMode = !g_playMode;
+		g_modeChanged = system::getTime();
+		g_active = wasActive;
+		LOGI("play mode %s", g_playMode ? "on" : "off");
+		return;
+	}
 	// The first press after a finger had the screen only brings the ring back.
 	if (!wasActive && !widgetOf(g_focus)) {
 		ensureFocus();
@@ -669,6 +681,11 @@ void gamepadNavButton(int button, bool down) {
 		case PAD_SELECT: cycleZoom(); break;
 		default: break;
 	}
+}
+
+
+bool gamepadPlayMode() {
+	return g_playMode;
 }
 
 
@@ -742,7 +759,8 @@ moved without a finger -- which on a small screen grabs a module or a knob as
 often as it grabs the background. */
 static void panAndZoom(float dt) {
 	app::RackScrollWidget* rs = APP->scene->rackScroll;
-	if (!rs)
+	// In play mode the stick and the triggers belong to the patch.
+	if (!rs || g_playMode)
 		return;
 	math::Vec pan(shapeStick(gamepadAxis(PAD_LX)), shapeStick(gamepadAxis(PAD_LY)));
 	if (pan.x != 0.f || pan.y != 0.f) {
@@ -941,7 +959,41 @@ struct GamepadOverlay : widget::Widget {
 		nvgResetScissor(args.vg);
 	}
 
+	/** Which mode the left stick is in: said in full for a moment after L3,
+	then kept as a small tag for as long as play mode lasts, since a stick that
+	has stopped moving the view needs explaining. */
+	void drawMode(const DrawArgs& args) {
+		bool fresh = system::getTime() - g_modeChanged < 2.5;
+		if (!fresh && !g_playMode)
+			return;
+		if (!APP->window->uiFont)
+			return;
+		std::string text = !fresh ? "PLAY"
+			: g_playMode ? "PLAY:  left stick, L2, R2 = CV"
+			: "VIEW:  left stick pans, L2 / R2 zoom";
+		NVGcolor accent = g_playMode ? nvgRGB(0x8D, 0xE0, 0x7A) : RING;
+		nvgFontFaceId(args.vg, APP->window->uiFont->handle);
+		nvgFontSize(args.vg, 13.f);
+		nvgTextAlign(args.vg, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+		float bounds[4];
+		nvgTextBounds(args.vg, 0.f, 0.f, text.c_str(), NULL, bounds);
+		float w = bounds[2] - bounds[0] + 20.f;
+		float h = 22.f;
+		float x = box.size.x - w - 10.f;
+		float y = std::fmax(cableParkTopInset(), 0.f) + 8.f;
+		nvgBeginPath(args.vg);
+		nvgRoundedRect(args.vg, x, y, w, h, h * 0.5f);
+		nvgFillColor(args.vg, nvgRGBA(0x1C, 0x18, 0x13, 0xEC));
+		nvgFill(args.vg);
+		nvgStrokeColor(args.vg, accent);
+		nvgStrokeWidth(args.vg, 1.2f);
+		nvgStroke(args.vg);
+		nvgFillColor(args.vg, accent);
+		nvgText(args.vg, x + 10.f, y + h * 0.5f, text.c_str(), NULL);
+	}
+
 	void draw(const DrawArgs& args) override {
+		drawMode(args);
 		widget::Widget* w = g_active ? widgetOf(g_focus) : NULL;
 		if (!w) {
 			widget::Widget::draw(args);

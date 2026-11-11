@@ -58,6 +58,7 @@
 #include "cable_park.hpp"
 #include "selection_glow.hpp"
 #include "gamepad_input.hpp"
+#include "gamepad_midi.hpp"
 #include "gamepad_nav.hpp"
 #include "tour_demo.hpp"
 #include "engine_barrier.hpp"
@@ -334,6 +335,7 @@ struct RackDroidApp {
 		midi::init();
 		rackdroid::amidiInit();
 		keyboard::init();
+		rackdroid::gamepadMidiInit();
 		midiloopback::init();
 		plugin::init();
 		rackdroid::loadStaticPlugins();
@@ -3674,6 +3676,7 @@ void android_main(android_app* app) {
 				if (APP->window && rackdroid::windowHasSurface()) {
 					rackdroid::touchStep();
 					rackdroid::gamepadNavStep();
+					rackdroid::gamepadMidiStep();
 					rackdroid::processTourDemo();
 					checkZoomCeiling();
 					checkMaxedOutOverload();
