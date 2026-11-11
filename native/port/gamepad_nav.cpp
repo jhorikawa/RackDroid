@@ -164,6 +164,9 @@ with it. A shoulder button acts when it is let go: used with the D-pad it was
 a grip on the module, and on its own it was a tap. */
 static int g_shoulderHeld = -1;
 static bool g_shoulderUsed = false;
+/** Letting go counts as a tap. Not when the press was what brought the ring
+back: that press has done its job already. */
+static bool g_shoulderTap = false;
 
 
 // --- lookups ----------------------------------------------------------------
@@ -852,7 +855,7 @@ void gamepadNavButton(int button, bool down) {
 				if (g_moving)
 					endMove(true);
 			}
-			else if (g_active && !g_moving && ensureFocus()) {
+			else if (g_shoulderTap && g_active && !g_moving && ensureFocus()) {
 				stepModule(button == PAD_L1 ? -1 : 1);
 			}
 		}
@@ -922,6 +925,13 @@ void gamepadNavButton(int button, bool down) {
 		}
 		ensureFocus();
 		g_follow = true;
+		if (button == PAD_L1 || button == PAD_R1) {
+			// Still a grip, though: held, it frames the module the D-pad
+			// would carry, so nothing moves unseen. Only the tap is spent.
+			g_shoulderHeld = button;
+			g_shoulderUsed = false;
+			g_shoulderTap = false;
+		}
 		return;
 	}
 
@@ -940,6 +950,7 @@ void gamepadNavButton(int button, bool down) {
 			// Decided when it is let go: see g_shoulderHeld.
 			g_shoulderHeld = button;
 			g_shoulderUsed = false;
+			g_shoulderTap = true;
 			break;
 		default: break;
 	}
@@ -950,6 +961,7 @@ void gamepadNavCancelHeld() {
 	g_dirHeld = -1;
 	g_shoulderHeld = -1;
 	g_shoulderUsed = false;
+	g_shoulderTap = false;
 	releaseMomentary();
 }
 
