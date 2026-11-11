@@ -12,7 +12,7 @@
    ],
    "params": [],
    "data": {
-    "text": "NOVA: STICK CV\n\n1. Press L3 (click the left stick):\n   PLAY mode\n2. Squeeze L2: volume\n3. Left stick left/right: filter\n4. Left stick up/down: pitch\n\nPress L3 again to get the stick\nback for panning the rack."
+    "text": "NOVA: STICK CV\n\n1. Press R3 (click the right\n   stick): PLAY mode\n2. Right stick left/right:\n   filter\n3. Right stick up/down: pitch\n\nPress R3 again and the right\nstick turns the focused knob.\n\nThe left stick pans and L2/R2\nzoom in both modes."
    }
   },
   {
@@ -27,13 +27,13 @@
    "params": [],
    "data": {
     "ccs": [
+     2,
+     3,
+     15,
      0,
      1,
      4,
      5,
-     16,
-     2,
-     3,
      6,
      7,
      8,
@@ -150,7 +150,7 @@
    "params": [
     {
      "id": 0,
-     "value": 1.0
+     "value": 0.55
     },
     {
      "id": 1,
@@ -200,14 +200,6 @@
    "inputModuleId": 3,
    "inputId": 1,
    "color": "#8b4ade"
-  },
-  {
-   "id": 3,
-   "outputModuleId": 2,
-   "outputId": 2,
-   "inputModuleId": 5,
-   "inputId": 0,
-   "color": "#f3374b"
   },
   {
    "id": 4,

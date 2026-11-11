@@ -14,8 +14,10 @@
  *   right stick  turn the focused knob directly
  *   left stick   pan the rack
  *   L2 / R2      zoom out / in
- *   L3           play mode: the left stick and the triggers become voltages
- *                for the patch instead (see gamepad_midi.cpp)
+ *   R3           play mode: the right stick becomes two voltages for the patch
+ *                instead (see gamepad_midi.cpp). Only the right stick changes
+ *                hands -- a knob can still be edited with A and the D-pad,
+ *                while nothing else can pan.
  *   L1 / R1      previous / next module
  *   SELECT       cycle the zoom
  *
@@ -661,7 +663,7 @@ void gamepadNavButton(int button, bool down) {
 	}
 	if (!down)
 		return;
-	if (button == PAD_L3) {
+	if (button == PAD_R3) {
 		g_playMode = !g_playMode;
 		g_modeChanged = system::getTime();
 		g_active = wasActive;
@@ -714,7 +716,8 @@ static float shapeStick(float v) {
 
 
 static void turnWithStick(float dt) {
-	if (!g_active || g_focus.kind != FOCUS_PARAM)
+	// In play mode the right stick belongs to the patch.
+	if (g_playMode || !g_active || g_focus.kind != FOCUS_PARAM)
 		return;
 	// Up and right turn the knob up; sideways is a tenth as fast, for trimming.
 	float amount = -shapeStick(gamepadAxis(PAD_RY)) * 0.55f + shapeStick(gamepadAxis(PAD_RX)) * 0.055f;
@@ -759,8 +762,7 @@ moved without a finger -- which on a small screen grabs a module or a knob as
 often as it grabs the background. */
 static void panAndZoom(float dt) {
 	app::RackScrollWidget* rs = APP->scene->rackScroll;
-	// In play mode the stick and the triggers belong to the patch.
-	if (!rs || g_playMode)
+	if (!rs)
 		return;
 	math::Vec pan(shapeStick(gamepadAxis(PAD_LX)), shapeStick(gamepadAxis(PAD_LY)));
 	if (pan.x != 0.f || pan.y != 0.f) {
@@ -959,9 +961,9 @@ struct GamepadOverlay : widget::Widget {
 		nvgResetScissor(args.vg);
 	}
 
-	/** Which mode the left stick is in: said in full for a moment after L3,
+	/** Which mode the right stick is in: said in full for a moment after R3,
 	then kept as a small tag for as long as play mode lasts, since a stick that
-	has stopped moving the view needs explaining. */
+	has stopped turning knobs needs explaining. */
 	void drawMode(const DrawArgs& args) {
 		bool fresh = system::getTime() - g_modeChanged < 2.5;
 		if (!fresh && !g_playMode)
@@ -969,8 +971,8 @@ struct GamepadOverlay : widget::Widget {
 		if (!APP->window->uiFont)
 			return;
 		std::string text = !fresh ? "PLAY"
-			: g_playMode ? "PLAY:  left stick, L2, R2 = CV"
-			: "VIEW:  left stick pans, L2 / R2 zoom";
+			: g_playMode ? "PLAY:  right stick = CV"
+			: "EDIT:  right stick turns the knob";
 		NVGcolor accent = g_playMode ? nvgRGB(0x8D, 0xE0, 0x7A) : RING;
 		nvgFontFaceId(args.vg, APP->window->uiFont->handle);
 		nvgFontSize(args.vg, 13.f);

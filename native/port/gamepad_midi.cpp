@@ -8,22 +8,23 @@
  * driver id (-10) and name, so a patch made on either side finds the driver on
  * the other. The CC numbers follow what GLFW gives for a standard pad there:
  *
- *   CC 0  left stick X      -10..10 V (right is positive)
- *   CC 1  left stick Y      -10..10 V (up is positive)
- *   CC 2  right stick X     held at 0: the right stick turns the focused knob
- *   CC 3  right stick Y     held at 0
- *   CC 4  L2                0..10 V
- *   CC 5  R2                0..10 V
+ *   CC 0  left stick X      held at 0: the left stick pans the rack
+ *   CC 1  left stick Y      held at 0
+ *   CC 2  right stick X     -10..10 V (right is positive)
+ *   CC 3  right stick Y     -10..10 V (up is positive)
+ *   CC 4  L2                held at 0: the triggers zoom the rack
+ *   CC 5  R2                held at 0
  *   CC 6..20  buttons A B X Y L1 R1 SELECT START GUIDE L3 R3 up right down left
- *             (0 or 10 V; only R3 is sent, the rest operate the rack)
+ *             (0 or 10 V; only L3 is sent, as a gate -- the rest operate the
+ *             rack, and R3 is the play-mode switch)
  *   CC 21 on  reserved for the tilt sensor and the touch pad
  *
- * Two differences from the desktop driver, both on purpose: the triggers rest
- * at 0 V instead of -10 V, and stick-up is the positive direction.
+ * One difference from the desktop driver, on purpose: stick-up is the positive
+ * direction.
  *
- * The sticks and triggers only reach the patch in play mode (L3 toggles it,
- * see gamepad_nav.cpp). Outside it they pan and zoom the rack, and the patch
- * sees them at rest.
+ * The right stick only reaches the patch in play mode (R3 toggles it, see
+ * gamepad_nav.cpp). Outside it the stick turns the focused knob, and the patch
+ * sees it at rest.
  */
 #include <algorithm>
 #include <cmath>
@@ -66,10 +67,8 @@ struct PadMidiDevice : rack::midi::InputDevice {
 		bool play = gamepadPlayMode();
 		float axes[NUM_AXES] = {};
 		if (play) {
-			axes[0] = restAtZero(gamepadAxis(PAD_LX));
-			axes[1] = -restAtZero(gamepadAxis(PAD_LY));
-			axes[4] = gamepadAxis(PAD_L2);
-			axes[5] = gamepadAxis(PAD_R2);
+			axes[2] = restAtZero(gamepadAxis(PAD_RX));
+			axes[3] = -restAtZero(gamepadAxis(PAD_RY));
 		}
 		for (int i = 0; i < NUM_CCS; i++) {
 			// Same encoding as Rack's own driver: fourteen bits, allowed to go
@@ -78,7 +77,7 @@ struct PadMidiDevice : rack::midi::InputDevice {
 			if (i < NUM_AXES)
 				value = (int16_t) std::max(-0x3f80, std::min(0x3f80, (int) std::round(axes[i] * 0x3f80)));
 			else
-				value = (play && i - NUM_AXES == PAD_R3 && gamepadButton(PAD_R3)) ? 0x3f80 : 0;
+				value = (play && i - NUM_AXES == PAD_L3 && gamepadButton(PAD_L3)) ? 0x3f80 : 0;
 			if (value == sent[i])
 				continue;
 			sent[i] = value;
