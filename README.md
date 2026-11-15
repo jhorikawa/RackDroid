@@ -1,3 +1,5 @@
+> **This is a fork for the Retroid Pocket Nova**: it adds game-controller operation (focus, editing, patching, moving modules) and the sticks, tilt and a touch pad as control voltages. What it adds and how to use it: **[nova/README.md](nova/README.md)** (Japanese). Everything below is upstream's README, from [nowheel/RackDroid](https://github.com/nowheel/RackDroid).
+
 <div align="center">
 
 <img src="graphics/readme/hero-en.svg" width="100%" alt="RackDroid: your modular rack, in your pocket">
