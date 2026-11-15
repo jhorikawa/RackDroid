@@ -63,6 +63,20 @@
 - [ ] 実機で確認：傾きで音が変わるか、向きと効き具合（本体を動かせないため未確認）
 - 作業中のパッチは `work-in-progress.vcv` として保存してからテストした
 
+## M5 Mac との受け渡しと仕上げ（2026-11-16）
+
+- [x] パッチの保存先を共有領域へ（`native/port/patch_share.cpp`）：`user/patches` を `/sdcard/Android/data/<アプリID>/files/Patches` へのリンクにし、既存のパッチを移した。アプリから見えるパスは変わらない
+  - アプリが作るファイルは持ち主だけ読める権限（rw-------）で、adb から一覧はできても読めなかった → 起動時にグループ読み書き可へ直し、以後作るファイルも `umask(0007)` で同じにした
+- [x] Mac 側のスクリプト `nova/tools/novasync`（`list` / `push` / `pull` / `recordings`）。push したファイルはアプリが上書きできるよう権限を直す
+- [x] Nova → Mac：Nova で保存した `work-in-progress.vcv` を取り出し、中身が tar.zst（デスクトップ版 Rack 2 と同じ形式、Rack 2.6.4）であることを確認
+- [x] Mac → Nova：Mac の VCV Rack の自動保存パッチ（Rack 2.6.6、24 モジュール、Core と Fundamental）を送り、Nova で開けることを確認（エラーの記録なし）
+- [ ] Mac の VCV Rack で Nova のパッチを開く確認は未実施。開くと Mac 側の作業中パッチ（自動保存）が置き換わるため、ユーザーに頼む。`work-in-progress.vcv` は Valley/Dexter を含むので、Mac 側に Valley パックが要る
+- [x] メニューを開いた時点で 1 行目を選択（自前のカーソルにした。標準の選択はタッチモード中は出ないため）
+- [x] 更新確認は公式パッケージ（`org.rackdroid`）のときだけ。改造版では尋ねも確認もしない
+- [ ] MIDI の確認 4 通り（ユーザーの機材が要る）
+- [ ] 使い方ドキュメント `nova/README.md`
+- [ ] ツールバーを最初は畳む、アプリ名の変更（要望があれば）
+
 ## 公開
 
 - 2026-11-12：ユーザーの依頼で、GitHub に fork を作って `nova` ブランチを push した（https://github.com/jhorikawa/RackDroid 、本家 `nowheel/RackDroid` の fork、公開）。計画では「push しない」としていたが、これで変更。以後も push は依頼があったときだけ行う

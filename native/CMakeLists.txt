@@ -1045,6 +1045,7 @@ if(ANDROID)
 		port/adpf.cpp
 		port/amidi_driver.cpp
 		port/static_plugins.cpp
+		port/patch_share.cpp
 	)
 	# Not linked: dlopen'd at runtime. Declared so they get built + packaged.
 	add_dependencies(rackdroid plugin_fundamental plugin_bogaudio)

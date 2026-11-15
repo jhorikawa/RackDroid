@@ -46,6 +46,8 @@ object AppUpdates {
 	// releases too, so "latest" is regularly not the application.
 	private const val RELEASES_API =
 		"https://api.github.com/repos/nowheel/RackDroid/releases?per_page=15"
+	/** The package the releases above are builds of. */
+	private const val OFFICIAL_PACKAGE = "org.rackdroid"
 	private const val PREFS = "updates"
 	private const val KEY_ASKED = "opt_in_asked"
 	private const val KEY_ENABLED = "enabled"
@@ -77,7 +79,15 @@ object AppUpdates {
 	/** Once per launch. Asks for consent the first time, then — only if it was
 	 * granted, and at most once a day — looks for a new release in the
 	 * background. Silent when there is nothing to report. */
+	/** Whether those releases are updates of THIS app. A build under another
+	 * package name (-PtestBuild, a fork) is not what they contain: installing
+	 * one would not update it, only put the official app beside it. Such a
+	 * build neither asks nor checks. */
+	fun applies(context: Context) = context.packageName == OFFICIAL_PACKAGE
+
 	fun onStart(activity: Activity) {
+		if (!applies(activity))
+			return
 		val p = prefs(activity)
 		if (!p.getBoolean(KEY_ASKED, false)) {
 			askOptIn(activity)
@@ -133,6 +143,8 @@ object AppUpdates {
 	}
 
 	fun checkNow(activity: Activity) {
+		if (!applies(activity))
+			return
 		prefs(activity).edit()
 			.putBoolean(KEY_ASKED, true)
 			.putBoolean(KEY_ENABLED, true)

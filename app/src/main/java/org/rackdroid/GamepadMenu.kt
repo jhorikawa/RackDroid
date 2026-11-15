@@ -276,6 +276,14 @@ class GamepadMenu(
 		private val iconW = if (modules) dp(64) else dp(28)
 		private val iconH = if (modules) dp(56) else dp(28)
 
+		/** The row the controller is on. Kept here and drawn as the row's
+		 * background, not left to the list's own selection: a list opened
+		 * while the window is in touch mode shows no selection until a key
+		 * arrives, so the first press of the D-pad was spent making one
+		 * appear, and A straight after opening did nothing. */
+		var cursor = 0
+		private val cursorColor = (inkColor and 0x00FFFFFF) or 0x40000000
+
 		override fun getCount() = rows.size
 		override fun getItem(position: Int): Any = rows[position]
 		override fun getItemId(position: Int) = position.toLong()
@@ -297,6 +305,7 @@ class GamepadMenu(
 						.apply { marginStart = dp(20) }
 				})
 			}
+			row.setBackgroundColor(if (position == cursor) cursorColor else Color.TRANSPARENT)
 			val r = rows[position]
 			val image = row.getChildAt(0) as ImageView
 			val text = row.getChildAt(1) as TextView
@@ -316,10 +325,16 @@ class GamepadMenu(
 
 	private fun list(title: String, rows: List<Row>, onPick: (Int) -> Unit) {
 		val builder = AlertDialog.Builder(activity)
+		val adapter = RowAdapter(builder.context, rows)
 		val dialog = builder
 			.setTitle(title)
-			.setAdapter(RowAdapter(builder.context, rows)) { _, i -> onPick(i) }
+			.setAdapter(adapter) { _, i -> onPick(i) }
 			.create()
+		fun moveCursor(to: Int) {
+			adapter.cursor = to.coerceIn(0, rows.size - 1)
+			adapter.notifyDataSetChanged()
+			dialog.listView?.smoothScrollToPosition(adapter.cursor)
+		}
 		// A release only counts if this dialog saw the press. The button that
 		// opened the menu is still down when the menu appears, and its release
 		// arrives here: taken at face value, letting go of START closed the
@@ -344,13 +359,19 @@ class GamepadMenu(
 				}
 			}
 			when (keyCode) {
-				KeyEvent.KEYCODE_BUTTON_A -> {
+				// The D-pad, whether it arrives as keys or (as on the Nova)
+				// as the HAT axis Android turns into these keys.
+				KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+					if (down)
+						moveCursor(adapter.cursor + if (keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
+					true
+				}
+				KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
 					// On release, as a tap is: the next dialog must not open
 					// with A still down.
-					if (!down && lv != null) {
-						val pos = lv.selectedItemPosition
-						if (pos >= 0)
-							lv.performItemClick(lv.selectedView, pos, lv.getItemIdAtPosition(pos))
+					if (!down && rows.isNotEmpty()) {
+						dialog.dismiss()
+						onPick(adapter.cursor)
 					}
 					true
 				}
@@ -362,9 +383,7 @@ class GamepadMenu(
 				KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_BUTTON_R1 -> {
 					if (down && lv != null && lv.count > 0) {
 						val page = maxOf(1, lv.lastVisiblePosition - lv.firstVisiblePosition)
-						val from = if (lv.selectedItemPosition >= 0) lv.selectedItemPosition else lv.firstVisiblePosition
-						val to = if (keyCode == KeyEvent.KEYCODE_BUTTON_L1) from - page else from + page
-						lv.setSelection(to.coerceIn(0, lv.count - 1))
+						moveCursor(adapter.cursor + if (keyCode == KeyEvent.KEYCODE_BUTTON_L1) -page else page)
 					}
 					true
 				}
@@ -374,12 +393,8 @@ class GamepadMenu(
 		dialog.setOnDismissListener { if (open === dialog) open = null }
 		open = dialog
 		dialog.show()
-		// A list shown from a button should start with its first row
-		// selected, not wait for a D-pad press to leave touch mode.
-		dialog.listView?.let {
-			it.isFocusableInTouchMode = true
-			it.requestFocusFromTouch()
-			it.setSelection(0)
-		}
+		// One highlight, not two: the list's own selection would sit on
+		// whichever row it last landed on while the cursor moved elsewhere.
+		dialog.listView?.selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
 	}
 }

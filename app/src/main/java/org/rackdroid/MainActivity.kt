@@ -1074,7 +1074,7 @@ class MainActivity : NativeActivity() {
 			.setNeutralButton("Log") { _, _ -> showLogViewer() }
 		// Only the GitHub build can update itself; the Play build leaves that
 		// to the store, so the row is not there at all (AppUpdates.SUPPORTED).
-		if (AppUpdates.SUPPORTED)
+		if (AppUpdates.SUPPORTED && AppUpdates.applies(this))
 			dialog.setNegativeButton(R.string.menu_check_updates) { _, _ -> AppUpdates.checkNow(this) }
 		dialog.show()
 	}

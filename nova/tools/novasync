@@ -1,0 +1,66 @@
+#!/bin/bash
+# Move patches and recordings between this Mac and the Nova, over adb.
+#
+#   novasync list                 patches on the Nova
+#   novasync push FILE.vcv ...    Mac -> Nova (shows up in File > Open at once)
+#   novasync pull [NAME] [DIR]    Nova -> Mac; no NAME pulls every patch
+#                                 (DIR defaults to ./patches-from-nova)
+#   novasync recordings [DIR]     pull the WAV recordings (Documents/RackDroid)
+#
+# The app keeps its patches in its own folder on shared storage (see
+# native/port/patch_share.cpp), which adb can read and write directly.
+# NOVA_APP picks the app: org.rackdroid.test (this fork, the default) or
+# org.rackdroid (the official build, which keeps its patches private).
+set -euo pipefail
+
+ADB="${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}"
+APP="${NOVA_APP:-org.rackdroid.test}"
+REMOTE="/sdcard/Android/data/$APP/files/Patches"
+
+if ! "$ADB" get-state >/dev/null 2>&1; then
+	echo "novasync: no device. Connect the Nova with USB debugging on." >&2
+	exit 1
+fi
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+	list)
+		"$ADB" shell "ls -1 '$REMOTE' 2>/dev/null" | grep -i '\.vcv$' || echo "(no patches)"
+		;;
+	push)
+		[ $# -gt 0 ] || { echo "usage: novasync push FILE.vcv ..." >&2; exit 2; }
+		"$ADB" shell "mkdir -p '$REMOTE'"
+		for f in "$@"; do
+			[ -f "$f" ] || { echo "novasync: not a file: $f" >&2; exit 2; }
+			"$ADB" push "$f" "$REMOTE/" >/dev/null 2>&1
+			# adb leaves the file read-only to the app, which could then open
+			# the patch but not save over it.
+			"$ADB" shell "chmod 660 '$REMOTE/$(basename "$f")'"
+			echo "pushed: $(basename "$f")"
+		done
+		;;
+	pull)
+		name="${1:-}"
+		dest="${2:-patches-from-nova}"
+		mkdir -p "$dest"
+		if [ -n "$name" ]; then
+			"$ADB" pull "$REMOTE/$name" "$dest/" >/dev/null 2>&1
+			echo "pulled: $dest/$name"
+		else
+			"$ADB" shell "ls -1 '$REMOTE' 2>/dev/null" | tr -d '\r' | grep -i '\.vcv$' | while IFS= read -r n; do
+				"$ADB" pull "$REMOTE/$n" "$dest/" >/dev/null 2>&1 </dev/null
+				echo "pulled: $dest/$n"
+			done
+		fi
+		;;
+	recordings)
+		dest="${1:-recordings-from-nova}"
+		mkdir -p "$dest"
+		"$ADB" pull "/sdcard/Documents/RackDroid/." "$dest/" 2>&1 | tail -1
+		;;
+	*)
+		sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+		exit 2
+		;;
+esac

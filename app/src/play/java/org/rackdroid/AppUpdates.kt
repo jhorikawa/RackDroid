@@ -17,6 +17,8 @@ object AppUpdates {
 	const val SUPPORTED = false
 
 	/** Called once per launch. Nothing to do here. */
+	fun applies(context: android.content.Context) = false
+
 	fun onStart(activity: Activity) {}
 
 	/** Never reached: this build never starts an install session. */

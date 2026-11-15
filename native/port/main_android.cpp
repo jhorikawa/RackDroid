@@ -60,6 +60,7 @@
 #include "gamepad_input.hpp"
 #include "gamepad_midi.hpp"
 #include "gamepad_nav.hpp"
+#include "patch_share.hpp"
 #include "tour_demo.hpp"
 #include "engine_barrier.hpp"
 #include "thread_choice.hpp"
@@ -103,6 +104,9 @@ struct RackDroidApp {
 		asset::userDir = filesDir + "/user";
 		system::createDirectories(asset::systemDir);
 		system::createDirectories(asset::userDir);
+		// Before anything reads or seeds the patches folder.
+		rackdroid::sharePatchesFolder(asset::userDir,
+			app->activity->externalDataPath ? app->activity->externalDataPath : "");
 
 		// Rebrand: "VCV" is a trademark not licensed for third-party ports.
 		// APP_NAME is const but never constant-folded (heap-backed string);
