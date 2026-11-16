@@ -159,6 +159,9 @@ void loadStaticPlugins() {
 	// only these base modules.
 	bool baseLoaded = loadBundledPlugin("Fundamental", "libplugin_fundamental.so");
 	baseLoaded = loadBundledPlugin("RackDroidDrums", "libplugin_drums.so") && baseLoaded;
+	// This fork's own pack (nova/plugin). Not part of the base the host smoke
+	// test insists on: a build without it is still a working RackDroid.
+	loadBundledPlugin("NovaModular", "libplugin_nova.so");
 #ifndef ANDROID
 	if (!baseLoaded)
 		throw Exception("Host smoke test could not load every base plugin");

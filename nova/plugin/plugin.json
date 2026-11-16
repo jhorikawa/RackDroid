@@ -1,0 +1,59 @@
+{
+  "slug": "NovaModular",
+  "name": "Nova Modular",
+  "version": "2.0.0",
+  "license": "GPL-3.0-or-later",
+  "brand": "Nova Modular",
+  "author": "RackDroid Nova fork",
+  "authorEmail": "",
+  "authorUrl": "",
+  "pluginUrl": "https://github.com/jhorikawa/RackDroid/tree/nova/nova",
+  "manualUrl": "https://github.com/jhorikawa/RackDroid/blob/nova/nova/README.md",
+  "sourceUrl": "https://github.com/jhorikawa/RackDroid",
+  "donateUrl": "",
+  "changelogUrl": "",
+  "description": "Mutable Instruments modules that Audible Instruments does not have, built from the original firmware. Based on BrickRack.",
+  "modules": [
+    {
+      "slug": "Plaits24",
+      "name": "Macro Oscillator 2 (24 models)",
+      "description": "Based on Mutable Instruments Plaits, firmware 1.2: the 16 original models plus the 8 added later (6-op FM, wave terrain, string machine, chiptune...)",
+      "manualUrl": "https://pichenettes.github.io/mutable-instruments-documentation/modules/plaits/manual/",
+      "tags": ["Oscillator", "Hardware clone", "Polyphonic"]
+    },
+    {
+      "slug": "Beads",
+      "name": "Texture Synthesizer 2",
+      "description": "Based on Mutable Instruments Beads: granular processor, delay and reverb, with a wavetable synth when nothing is patched in",
+      "manualUrl": "https://pichenettes.github.io/mutable-instruments-documentation/modules/beads/manual/",
+      "tags": ["Granular", "Delay", "Reverb", "Effect", "Hardware clone"]
+    },
+    {
+      "slug": "Peaks",
+      "name": "Dual Trigger Converter",
+      "description": "Based on Mutable Instruments Peaks: two channels of envelopes, LFOs, tap LFO, drums, sequencer and pulse tools",
+      "manualUrl": "https://pichenettes.github.io/mutable-instruments-documentation/modules/peaks/manual/",
+      "tags": [
+        "Envelope generator",
+        "Low-frequency oscillator",
+        "Drum",
+        "Dual",
+        "Hardware clone"
+      ]
+    },
+    {
+      "slug": "Edges",
+      "name": "Quad Chiptune Oscillator",
+      "description": "Based on Mutable Instruments Edges: three timer-based pulse oscillators and a NES-style triangle/noise voice",
+      "manualUrl": "https://pichenettes.github.io/mutable-instruments-documentation/modules/edges/manual/",
+      "tags": ["Oscillator", "Quad", "Digital", "Hardware clone"]
+    },
+    {
+      "slug": "Blades",
+      "name": "Dual Multimode Filter",
+      "description": "Based on Mutable Instruments Blades: two multimode filters with drive, in parallel or in series (a digital model of the analog circuit)",
+      "manualUrl": "https://pichenettes.github.io/mutable-instruments-documentation/modules/blades/manual/",
+      "tags": ["Filter", "Distortion", "Dual", "Hardware clone"]
+    }
+  ]
+}

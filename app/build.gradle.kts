@@ -129,6 +129,14 @@ val packSystemAssets = tasks.register<Zip>("packSystemAssets") {
 		include("res/**")
 		into("plugins/RackDroidDrums")
 	}
+	// Nova Modular: this fork's own pack (nova/plugin). Its panels are
+	// drawn by the plugin, so res/ holds only the font they are lettered in.
+	from(rootProject.file("nova/plugin")) {
+		include("plugin.json")
+		include("res/**")
+		include("LICENSE.md", "THIRD_PARTY_NOTICES*")
+		into("plugins/NovaModular")
+	}
 	// Lean base: only Fundamental (above) + RackDroid Drums are bundled.
 	// Every other pack ships as an on-demand .rdmod (scripts/make_rdmods.sh,
 	// MODULES.md); its res/ travels inside the pack, not in system.zip.
@@ -173,7 +181,7 @@ val packSystemAssets = tasks.register<Zip>("packSystemAssets") {
 // here.
 val packThumbnailAssets = tasks.register<Zip>("packThumbnailAssets") {
 	from(rootProject.file("graphics/browser-thumbs")) {
-		include("Core/**", "Fundamental/**", "RackDroidDrums/**")
+		include("Core/**", "Fundamental/**", "RackDroidDrums/**", "NovaModular/**")
 	}
 	archiveFileName.set("thumbnails.zip")
 	destinationDirectory.set(layout.buildDirectory.dir("generated/assets"))
@@ -242,7 +250,7 @@ android {
 				// dlopen'd at runtime and must be packaged explicitly. Normal
 				// builds compile only the base set; release-pack CI uses
 				// -PallPlugins so scripts/make_rdmods.sh has every selected-ABI library.
-				val baseTargets = listOf("rackdroid", "plugin_fundamental", "plugin_drums")
+				val baseTargets = listOf("rackdroid", "plugin_fundamental", "plugin_drums", "plugin_nova")
 				val optionalTargets = listOf(
 					"plugin_bogaudio", "plugin_valley", "plugin_hetrickcv", "plugin_jw",
 					"plugin_ml", "plugin_rj", "plugin_computerscare", "plugin_littleutils",

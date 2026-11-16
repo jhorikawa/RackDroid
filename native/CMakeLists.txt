@@ -981,6 +981,10 @@ if(RACKDROID_UI)
 	file(GLOB DRUMS_SOURCES ${DRUMS_DIR}/src/*.cpp)
 	add_simple_plugin(plugin_drums ${DRUMS_DIR} ${DRUMS_SOURCES})
 
+	# Nova Modular (5 modules): this fork's own pack, defined next to its
+	# sources so the list stays beside the desktop Makefile it mirrors.
+	include(${CMAKE_CURRENT_SOURCE_DIR}/../nova/plugin/plugin.cmake)
+
 	# QuickJS (MIT, Bellard) -- JS engine for Aria's Qqqq/Quack/Q quantizers
 	# (they run TonalJS). Same pinned fork+commit as Aria's upstream Makefile.
 	set(QJS_DIR ${THIRD_PARTY}/QuickJS)
