@@ -10,6 +10,10 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -62,6 +66,9 @@ class GamepadMenu(
 		const val MAIN = 0
 		const val ADD_MODULE = 1
 
+		/** The category of Mutable Instruments ports. */
+		private const val MUTABLE = "MUTABLE"
+
 		/** Matches GamepadCommand in gamepad_nav.cpp. */
 		const val CMD_MODULE_MENU = 1
 		const val CMD_MOVE_MODULE = 2
@@ -92,13 +99,19 @@ class GamepadMenu(
 		private const val LINE_MIDI = "M12,3 A9,9 0 1 0 12.01,3 M7,13 h0.01 M17,13 h0.01 M8.6,8.6 h0.01 M15.4,8.6 h0.01 M12,7 h0.01"
 		private const val LINE_XY = "M4,4 H20 V20 H4 Z M4,14 H20 M10,4 V20 M10,14 h0.01"
 		private const val LINE_MISC = "M5,12 h0.01 M12,12 h0.01 M19,12 h0.01"
+		private const val LINE_MUTABLE = "M4,19 V5 L12,14 L20,5 V19"
 	}
 
-	private data class Entry(val key: String, val name: String, val brand: String, val tags: List<String>)
+	/** @param origin the Mutable Instruments module this one is a port of
+	 * ("Plaits"), or null (MutableOrigin). */
+	private data class Entry(val key: String, val name: String, val brand: String, val tags: List<String>,
+		val origin: String?)
 
 	/** One row of a menu. A module row has no icon of its own: its panel is
-	 * looked up when the row comes on screen. */
-	private class Row(val label: String, val icon: Drawable? = null, val thumbKey: String? = null)
+	 * looked up when the row comes on screen. A row may carry a second,
+	 * smaller line under its label. */
+	private class Row(val label: String, val icon: Drawable? = null, val thumbKey: String? = null,
+		val note: String? = null)
 
 	/** Same categories, in the same order, as the palette's chips
 	 * (ModulePalette.tagCategories): the two pickers should agree on what a
@@ -229,7 +242,9 @@ class GamepadMenu(
 				if (tagsJ != null)
 					for (t in 0 until tagsJ.length())
 						tags.add(tagsJ.getString(t))
-				out.add(Entry(o.getString("key"), o.optString("name"), o.optString("brand"), tags))
+				val key = o.getString("key")
+				out.add(Entry(key, o.optString("name"), o.optString("brand"), tags,
+					MutableOrigin.of(key, o.optString("description"))))
 			}
 		}
 		return out
@@ -245,6 +260,12 @@ class GamepadMenu(
 			return
 		}
 		val cats = ArrayList<Triple<String, Drawable?, List<Entry>>>()
+		// The Mutable Instruments ports, whoever made them and whatever they
+		// are called: first, because their names are the ones that give no
+		// hint of what they are.
+		val mutable = entries.filter { it.origin != null }
+		if (mutable.isNotEmpty())
+			cats.add(Triple(MUTABLE, line(LINE_MUTABLE), mutable))
 		for ((label, icon, pred) in tagCategories) {
 			val found = entries.filter(pred)
 			if (found.isNotEmpty())
@@ -260,8 +281,22 @@ class GamepadMenu(
 	}
 
 	private fun showModules(category: String, entries: List<Entry>) {
-		val sorted = entries.sortedWith(compareBy({ it.name.lowercase() }, { it.brand.lowercase() }))
-		list("Add module: $category", sorted.map { Row("${it.name}   ·   ${it.brand}", thumbKey = it.key) }) {
+		// Among the Mutable ports the hardware's name leads, and orders the
+		// list: that is the name being looked for. Everywhere else it is a
+		// note under the module's own name.
+		val byOrigin = category == MUTABLE
+		val sorted = if (byOrigin)
+			entries.sortedWith(compareBy({ it.origin?.lowercase() }, { it.brand.lowercase() }, { it.name.lowercase() }))
+		else
+			entries.sortedWith(compareBy({ it.name.lowercase() }, { it.brand.lowercase() }))
+		val rows = sorted.map {
+			if (byOrigin)
+				Row("${it.origin}   ·   ${it.name}", thumbKey = it.key, note = it.brand)
+			else
+				Row("${it.name}   ·   ${it.brand}", thumbKey = it.key,
+					note = it.origin?.let { o -> "Mutable Instruments $o" })
+		}
+		list("Add module: $category", rows) {
 			// Where the palette puts a tapped module: the middle of the rack
 			// that is on screen. The focus moves to it (gamepad_nav.cpp).
 			val v = activity.window.decorView
@@ -283,6 +318,7 @@ class GamepadMenu(
 		 * appear, and A straight after opening did nothing. */
 		var cursor = 0
 		private val cursorColor = (inkColor and 0x00FFFFFF) or 0x40000000
+		private val noteColor = (inkColor and 0x00FFFFFF) or (0xB0 shl 24)
 
 		override fun getCount() = rows.size
 		override fun getItem(position: Int): Any = rows[position]
@@ -309,7 +345,11 @@ class GamepadMenu(
 			val r = rows[position]
 			val image = row.getChildAt(0) as ImageView
 			val text = row.getChildAt(1) as TextView
-			text.text = r.label
+			text.text = if (r.note == null) r.label else SpannableString("${r.label}\n${r.note}").apply {
+				val from = r.label.length + 1
+				setSpan(RelativeSizeSpan(0.78f), from, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+				setSpan(ForegroundColorSpan(noteColor), from, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+			}
 			if (r.thumbKey != null) {
 				// Decoded on demand and cached, as the palette's tiles are. A
 				// module with no art leaves its place empty.

@@ -37,6 +37,9 @@ class ModulePalette(
 	private val chooseAt: (String, Float, Float) -> Unit,
 ) {
 	companion object {
+		/** Tag of a tile's "based on" caption (TileAdapter). */
+		private const val ORIGIN_TAG = "origin"
+
 		/** Catch-all chips, kept as constants because [showAll] has to find the
 		 * ALL chip again in the row to open it. */
 		private const val ALL_CHIP = "ALL"
@@ -78,6 +81,10 @@ class ModulePalette(
 	 *        category by category is exhaustive rather than quietly lossy. */
 	private val categories: List<Pair<String, (Entry) -> Boolean>> =
 		listOf<Pair<String, (Entry) -> Boolean>>(ALL_CHIP to { _ -> true }) +
+		// The Mutable Instruments ports, under whatever name and from
+		// whichever pack (MutableOrigin): their own names do not say.
+		listOf<Pair<String, (Entry) -> Boolean>>(
+			"MUTABLE" to { e -> MutableOrigin.of(e.key, e.description) != null }) +
 		tagCategories +
 		listOf<Pair<String, (Entry) -> Boolean>>(
 			MISC_CHIP to { e -> tagCategories.none { (_, pred) -> pred(e) } })
@@ -966,6 +973,26 @@ class ModulePalette(
 					ViewGroup.LayoutParams.WRAP_CONTENT, pDp(110))
 				addView(image)
 				addView(info)
+				// The hardware a Mutable Instruments port is based on
+				// (MutableOrigin), across the foot of the thumbnail. An
+				// overlay like the badge above, so it cannot change the
+				// tile's height; found again by its tag in onBindViewHolder.
+				addView(TextView(activity).apply {
+					tag = ORIGIN_TAG
+					importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+					textSize = 9f
+					typeface = AppFont.get(activity)
+					gravity = Gravity.CENTER
+					maxLines = 1
+					ellipsize = android.text.TextUtils.TruncateAt.END
+					setTextColor(AppTheme.current.onAccent)
+					setBackgroundColor(AppTheme.withAlpha(AppTheme.current.accent, 90))
+					visibility = View.GONE
+					layoutParams = FrameLayout.LayoutParams(
+						ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+						gravity = Gravity.BOTTOM
+					}
+				})
 			}
 			// The label must NOT widen the tile: a long name (kept at up to
 			// dp(96) before) made the tile wider than its thumbnail, and the
@@ -1000,6 +1027,11 @@ class ModulePalette(
 			val e = items[position]
 			holder.image.setImageBitmap(ThumbnailCache.get(activity.filesDir, e.key, pDp(110)))
 			holder.name.text = e.name
+			val origin = MutableOrigin.of(e.key, e.description)
+			(holder.image.parent as View).findViewWithTag<TextView>(ORIGIN_TAG)?.apply {
+				text = origin
+				visibility = if (origin == null) View.GONE else View.VISIBLE
+			}
 			holder.root.contentDescription = activity.getString(
 				R.string.palette_module_description, e.name, e.brand)
 			holder.root.isFocusable = true
