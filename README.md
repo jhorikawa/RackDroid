@@ -1,4 +1,4 @@
-> **This is a fork for the Retroid Pocket Nova**: it adds game-controller operation (focus, editing, patching, moving modules) and the sticks, tilt and a touch pad as control voltages. What it adds and how to use it: **[nova/README.md](nova/README.md)** (Japanese). Everything below is upstream's README, from [nowheel/RackDroid](https://github.com/nowheel/RackDroid).
+> **This is a fork for the Retroid Pocket Nova**: it adds game-controller operation (focus, editing, patching, moving modules), the sticks, tilt and a touch pad as control voltages, and the five Mutable Instruments modules Audible Instruments lacks (Beads, Peaks, Edges, Blades, and Plaits with its 24 models), which also build as a plugin for desktop VCV Rack. What it adds and how to use it: **[nova/README.md](nova/README.md)** (Japanese). Everything below is upstream's README, from [nowheel/RackDroid](https://github.com/nowheel/RackDroid).
 
 <div align="center">
 

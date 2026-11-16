@@ -4,7 +4,9 @@
 
 本家はタッチ専用です。4.5 インチの画面では、画面を動かすつもりの指がモジュールやつまみを動かしてしまいます。この fork は、十字キーでつまみやジャックを選び、ボタンで編集・配線・モジュールの追加と移動ができるようにしました。スティック・本体の傾き・タッチパッドを、パッチの中の電圧（CV）として使うこともできます。
 
-タッチ操作など本家の機能はそのまま残してあります。パッチは VCV Rack 2 と同じ `.vcv` です。
+VCV の Audible Instruments にない Mutable Instruments 系のモジュール 5 つ（Beads、Peaks、Edges、Blades、24 モデル版の Plaits）も足してあります。同じモジュールを Mac の VCV Rack 2 にも入れられるので、それを使ったパッチも両方で開けます。
+
+タッチ操作など本家の機能はそのまま残してあります。パッチは VCV Rack 2 と同じ `.vcv` です。Nova に入るアプリの名前は「RackDroid Nova」です。
 
 - 本家：`nowheel/RackDroid`（GPLv3）。この fork も GPLv3 です。本家・VCV とは無関係の非公式な改造です。
 - 開発の記録：[docs/status.md](docs/status.md)、計画：[docs/plan.md](docs/plan.md)
@@ -49,7 +51,7 @@ Start でメインメニュー、X でモジュールの追加が開きます。
 
 | 項目 | 内容 |
 |---|---|
-| Add module… | 種類（VCO、LFO、VCF …）を選び、一覧からモジュールを選ぶ |
+| Add module… | 種類（MUTABLE、VCO、LFO、VCF …）を選び、一覧からモジュールを選ぶ |
 | Move module | フォーカス中のモジュールを移動する |
 | Module menu… | フォーカス中のモジュールのメニュー（初期化、複製、削除、バイパス、プリセット） |
 | XY pad | タッチパッドを出す・しまう |
@@ -97,6 +99,46 @@ VCV Rack 標準の「Gamepad」MIDI ドライバとして見えるので、専�
 | Nova 1 - Stick CV | R3 で演奏モードにして右スティックを倒す。左右でフィルター、上下で音程 |
 | Nova 2 - Tilt CV | R3 で演奏モードにして本体を傾ける。左右でフィルター、前後で音程 |
 | Nova 3 - XY Pad | タッチパッドに触れている間だけ音が出る。左右で音程、上下でフィルター |
+| Nova 4 - Mutable | 足した 5 モジュールを全部使った自動演奏（次の節） |
+
+## Mutable Instruments のモジュール
+
+### どれが Mutable 由来かを一覧で見分ける
+
+「Mutable Instruments」は商標なので、移植版は別の名前で並んでいます（Plaits は「Macro Oscillator 2」、Rings は「Resonator」など）。名前だけでは元のモジュールが分からないので、追加の一覧に元の名前を出すようにしました。
+
+![モジュール追加の一覧。MUTABLE の分類に、Beads、Blades、Blinds、Braids などが元の名前の順で並んでいる](images/README-mutable-list.png)
+
+X →「MUTABLE」。入っているパック全部から、Mutable 由来のモジュールだけが元の名前の順に並びます。
+
+- **コントローラーの一覧**（X）：いちばん上に「MUTABLE」の分類があります。行は「元の名前 · 移植版の名前」、その下にパックの名前です。ほかの分類（VCO、VCF など）では、Mutable 由来のモジュールの名前の下に「Mutable Instruments Plaits」のように出ます。
+- **タッチ用のパレット**（画面下の帯）：「MUTABLE」のチップが増え、タイルの絵の下に元の名前の帯が付きます。
+
+![画面下のパレット。MUTABLE が選ばれ、各タイルの下に Branches、Streams、Blades、Peaks などの帯が付いている](images/README-mutable-palette.png)
+
+タッチ用のパレット。帯は MUTABLE 以外の分類（ALL や VCO など）でも付きます。
+
+元の名前は、各モジュールの説明文（「Based on Mutable Instruments Plaits」など）から読み取っています。あとからパックを足しても、説明文にそう書いてあれば同じように出ます。
+
+### 足した 5 モジュール（Nova Modular）
+
+VCV の Audible Instruments（20 モジュール）にないものを、「Nova Modular」というプラグインとして同梱しました。別にパックを入れる必要はありません。
+
+![Nova の画面に 5 つのモジュールが並んでいる。左から DUAL TRIGGER、MACRO OSC 2、CHIPTUNE OSC、DUAL FILTER、TEXTURE SYNTH 2](images/README-mutable-modules.png)
+
+デモパッチ「Nova 4 - Mutable」を Nova で開いたところ。左から Peaks、Plaits、Edges、Blades、Beads にあたるモジュール。
+
+| パネルの表示 | 元のモジュール | 中身 | メモ |
+|---|---|---|---|
+| MACRO OSC 2 | Plaits（ファームウェア 1.2） | 元のファームウェアの DSP | 24 モデル。パネル上の 2 つのボタンでモデルを送り、選んだモデルの名前がタイトルの下に出る。ポリフォニック（16 声まで） |
+| TEXTURE SYNTH 2 | Beads | 元のファームウェアの DSP | 音声入力に何もつながないと、10 秒後にウェーブテーブルシンセになる（実機と同じ） |
+| DUAL TRIGGER | Peaks | 元のファームウェアの DSP | エンベロープ、LFO、タップ LFO、ドラムなど 8 機能 |
+| CHIPTUNE OSC | Edges | ファームウェアの再現 | 実機は 8 bit のマイコンとタイマーで鳴らすため、同じ計算と同じ表を使って作り直したもの |
+| DUAL FILTER | Blades | 回路のデジタルモデル | 実機はアナログ回路 |
+
+- **Plaits の 24 モデル**：左のボタンは緑のバンク、右のボタンは赤のバンクの中でモデルを送ります（元の 16 モデル）。後から足された 8 モデル（6 オペレーター FM、ウェーブテレイン、ストリングマシン、チップチューンなど。ランプは黄色）は、モジュールのメニューの「Model」で選ぶか、「Buttons step through all 24 models」をオンにしてボタンで順に送ります。
+- **実機でボタンの長押しや同時押しで行う設定**は、モジュールのメニューにあります（フォーカスを当てて Start →「Module menu…」）。Peaks の機能（Function）、Beads の音質（Quality）、Edges の波形、Plaits の LPG の設定などです。
+- **元になったもの**：5 モジュールとも [BrickRack](https://github.com/andrewfrangella/brickrack)（TrimUI Brick 用のモジュラーシンセ、GPLv3）の実装を、そのまま VCV Rack のモジュールとして動かしています。DSP は Émilie Gillet さんが公開している[ファームウェア](https://github.com/pichenettes/eurorack)（MIT、Edges は GPLv3）です。出典とライセンスは `plugin/THIRD_PARTY_NOTICES.md` にあります。
 
 ## Mac とパッチをやり取りする
 
@@ -112,6 +154,24 @@ nova/tools/novasync recordings                 # 録音した WAV を取り出�
 
 Nova で保存したパッチは、デスクトップ版の VCV Rack 2 と同じ形式です。開く側に同じモジュール（プラグイン）が入っていれば、そのまま開けます。
 
+- Nova で保存したパッチを Mac で開くと、Audio モジュールの出力先が未選択になります（保存されているのが Nova のオーディオ設定のため）。Audio モジュールでデバイスを選び直すと音が出ます。
+- Audible Instruments のモジュールを使ったパッチを Mac で開くには、Mac の VCV Rack にも Audible Instruments が要ります（VCV Library から無料で入れられます。VCV のアカウントが必要です）。
+
+### 足した 5 モジュールを Mac の VCV Rack にも入れる
+
+「Nova Modular」は普通の VCV Rack 2 のプラグインとしてもビルドできます。Nova 用と同じソースです。
+
+```sh
+nova/tools/rack-sdk-from-repo.sh                                        # ビルドに使う Rack のヘッダーをそろえる
+make -C nova/plugin RACK_DIR="$PWD/nova/downloads/rack-sdk" install     # ビルドして VCV Rack に入れる
+```
+
+`~/Library/Application Support/Rack2/plugins-mac-arm64/` に入り、次に VCV Rack を起動したときから「Nova Modular」のモジュールが使えます。1 行目のスクリプトは、このリポジトリにある Rack のソースと、Mac に入っている VCV Rack 2 から必要なものを集めます（先に Android 用のビルドを 1 回済ませておきます）。VCV が配っている Rack SDK を持っていれば、1 行目は要らず、`RACK_DIR` にその場所を指定します。
+
+![Mac の VCV Rack 2 に、Nova と同じ 5 つのモジュールが並び、下の Scope に波形が出ている](images/README-vcv-mac.jpg)
+
+Mac の VCV Rack 2 で同じ 5 モジュールを動かしたところ。下の Scope は各モジュールの出力。
+
 ## ビルドと導入
 
 Mac での手順です。Android Studio（同梱の JDK 21 を使う）と、Android SDK の NDK 27.2.12479018・CMake 3.22.1・API 35 が要ります。
@@ -123,12 +183,14 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 adb install -r app/build/outputs/apk/sideload/release/app-sideload-release.apk
 ```
 
-`-PtestBuild` を付けると、アプリ ID が `org.rackdroid.test`（表示名「RackDroid TEST」）になり、公式版と並べて入ります。モジュールパック（`.rdmod`、本家のリリースにあります）は `/sdcard/Android/data/org.rackdroid.test/files/Modules/` に置いて再起動します。
+`-PtestBuild` を付けると、アプリ ID が `org.rackdroid.test`（表示名「RackDroid Nova」）になり、公式版と並べて入ります。モジュールパック（`.rdmod`、本家のリリースにあります）は `/sdcard/Android/data/org.rackdroid.test/files/Modules/` に置いて再起動します。
 
 ## わかっていること・まだのこと
 
 - Nova（Android 13）でだけ確かめています。ほかのゲームパッドは、十字キーがキーでも軸でも届くように作ってありますが、試していません。
 - 音の遅れは Nova で合計およそ 50 ms です（本家と同じ。Nova が最速のオーディオ経路を許可しないため）。
-- 傾きの向きと効き具合は、実機での調整がまだです。
-- VCV Rack の Audible Instruments にない Mutable 系モジュール（Beads、Peaks、Edges、Blades）はありません。
-- 改造の中心は `native/port/gamepad_*.cpp` と `app/src/main/java/org/rackdroid/{GamepadMenu,TiltSensor,XyPad}.kt` です。VCV Rack 本体（`third_party/`）には手を入れていません。
+- 傾きの向きと効き具合は、いまの設定でいったん確定しています（細かい調整はしていません）。
+- MIDI（USB キーボード、外部機器、Mac の DAW、Bluetooth）は本家の機能のままで、この fork では機材がなく確かめていません。
+- 足した 5 モジュールは、Mac 上の検証（`nova/plugin/test/run.sh`：Plaits の 24 モデルが全部鳴ること、音程が 1 V/oct に合うこと、Peaks のエンベロープ、Blades のフィルター、Beads のグレインとシンセ）と、Nova での録音で確かめています。実機のモジュールとの聴き比べはしていません。元にした BrickRack も v0.1 です。
+- 足した 5 モジュールのうち、ポリフォニックなのは MACRO OSC 2 だけです。
+- 改造の中心は `native/port/gamepad_*.cpp` と `app/src/main/java/org/rackdroid/{GamepadMenu,TiltSensor,XyPad,MutableOrigin}.kt`、足したモジュールは `nova/plugin/` です。VCV Rack 本体（`third_party/`）には手を入れていません。

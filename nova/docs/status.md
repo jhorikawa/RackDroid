@@ -20,7 +20,7 @@
 
 ## M1 ソースからビルドして動かす
 
-- [x] `-PtestBuild` で別アプリ `org.rackdroid.test`（表示名 RackDroid TEST）として Nova に導入。公式版と並んで入る
+- [x] `-PtestBuild` で別アプリ `org.rackdroid.test`（表示名は当初 RackDroid TEST、2026-11-17 から RackDroid Nova）として Nova に導入。公式版と並んで入る
 - [x] パック 3 つを `/sdcard/Android/data/org.rackdroid.test/files/Modules/` に配置
 - [ ] アップデーターの停止（`.test` は別パッケージなので公式版に上書きされることはないが、明示的に止める）
 
@@ -75,13 +75,34 @@
 - [x] 更新確認は公式パッケージ（`org.rackdroid`）のときだけ。改造版では尋ねも確認もしない
 - [ ] MIDI の確認 4 通り：**保留**（2026-11-16 時点で試せる機材がユーザーの手元にない）
 - [x] 使い方ドキュメント `nova/README.md`（操作の図 `nova/images/README-controls.png` は `nova/images/src/controls.py` で作り直せる。画面写真 4 枚）。ルートの README の先頭に、この fork の説明への案内を 1 段落足した
-- [ ] ツールバーを最初は畳む、アプリ名の変更（要望があれば）
+- [ ] ツールバーを最初は畳む（要望があれば）
+- [x] アプリ名を「RackDroid Nova」に変更（2026-11-17、ユーザーの依頼）。アプリ ID は `org.rackdroid.test` のまま（入っているものに上書きでき、パッチと設定が残る）
 - [x] 既存の機能が改造版でも動くこと（2026-11-16、実機で確認）
   - 録音：ツールバーの録音ボタンで `Documents/RackDroid/` に WAV（ステレオ 16 bit 48 kHz）ができる
   - 画面オフ再生：自動で鳴るデモを録音しながら画面を 7 秒消した。13 秒の録音の全区間で音量が一定（無音の秒なし）
   - 画面の鍵盤：`Welcome.vcv` で鍵盤を 2 回押すと、押している間だけ録音に音が入る
   - タッチ：ツールバー、メニュー、パッチを開く操作、XY パッドはタッチで操作して確認済み
 - 傾きセンサーの向きと効き具合は、ユーザーが実機で触って「現状でいったん OK」（2026-11-16）
+
+## M6 足りないモジュールと、Mutable 由来の表示（2026-11-17）
+
+ユーザーの依頼：M6 をやる。足したモジュールは VCV Rack でも使えることが前提。モジュールを足すときの一覧で、どれが Mutable Instruments 由来か分かるようにする。
+
+- [x] プラグイン「Nova Modular」（`nova/plugin/`）：Beads、Peaks、Edges、Blades、Plaits（ファームウェア 1.2 の 24 モデル）
+  - brickrack（0.1.0、49b726c）のモジュール 5 つと枠組みを**無改造で**取り込み、VCV Rack の Module / ModuleWidget に包む層（`src/adapter.cpp`）を書いた。パネルは brickrack のパネル定義から描く（SVG なし）
+  - ファームウェアは `pichenettes/eurorack`（f4cfa76）と `stmlib`（e3bd7c9）から、使うファイルだけを `nova/plugin/eurorack/` に置いた。変更は 1 か所（Beads のデバッグ用 printf を外した）。`third_party/` には触れていない
+  - brickrack のエンジンは 48 kHz 固定で、Plaits と Peaks の包みはそれを前提にしている → この 2 つは 48 kHz で動かし、エンジンのレートが違うときは変換する
+  - Plaits はポリフォニック（チャンネルごとに 1 声、16 声まで）
+  - 実機でボタンの長押し・同時押しで行う設定（brickrack の「隠しパラメーター」）は、モジュールのメニューに出す。RackDroid のメニューはスライダーを出せないので、連続値は段階の項目にした
+- [x] Nova 用：アプリに同梱（`libplugin_nova.so`、APK は +0.8 MB）。CMake は `nova/plugin/plugin.cmake`、既存ファイルの変更は呼び出し口だけ
+- [x] Mac の VCV Rack 2 用：同じソースを `nova/plugin/Makefile` でビルド。Rack SDK はダウンロードせず、リポジトリ内の Rack のヘッダーと Mac の VCV Rack から組み立てる（`nova/tools/rack-sdk-from-repo.sh`）
+- [x] 一覧での表示（`MutableOrigin.kt`）：元の名前を各モジュールの説明文から読み取る。コントローラーの一覧に「MUTABLE」の分類（元の名前順）と、ほかの分類での注記。タッチ用パレットに「MUTABLE」のチップと、タイルの下の帯
+- [x] デモパッチ `Nova 4 - Mutable.vcv`（5 モジュールを全部使った自動演奏）
+- 確認したこと
+  - Mac 上の検証（`nova/plugin/test/run.sh`）：Plaits の 24 モデルが全部鳴る、0 V で C4・1 V で C5、Edges が 1 V で 1 オクターブ上がる、Peaks のエンベロープがゲートに従う、Blades のカットオフで高域が変わる、Beads のグレインと 10 秒後のシンセ。全項目通過
+  - Mac の VCV Rack 2.6.6：プラグインが読み込まれ、5 モジュールが Scope に波形を出す。3 音の和音を入れると Plaits の出力がポリフォニックになる。Nova で保存したパッチ（5 モジュール入り）がエラーなしで開く
+  - Nova：一覧に MUTABLE（27 モジュール）が出る。デモパッチを録音すると、0.5 秒ごとのステップと、メロディの音（G3、A#3 など）・1 オクターブ下の Edges が入っている。エンジンを 44.1 kHz にしても同じ音程。音切れなし（負荷は 1 スレッドで 30〜35%）。モジュールのメニューから Peaks の機能を LFO に変えると、パネルの表示とランプが変わる
+- まだのこと：実機のモジュールとの聴き比べ。MIDI は引き続き保留
 
 ## 公開
 

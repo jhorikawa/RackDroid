@@ -118,9 +118,11 @@ brickrack と同じ考え方で、「演奏に使う入力」と「操作に使�
   4. Bluetooth MIDI
 - 使い方のドキュメント（画像つき）を `nova/README.md` に書く。
 
-### M6　足りない 4 モジュール（任意・あとで判断）
+### M6　足りない 4 モジュール（2026-11-17 に実施）
 
-Beads / Peaks / Edges / Blades と Plaits の 24 エンジン版を、brickrack の実装をもとに RackDroid 用のパックにする。M5 まで使ってみて、必要なら着手する。
+Beads / Peaks / Edges / Blades と Plaits の 24 エンジン版を、brickrack の実装をもとに足す。
+
+当初は「RackDroid 用のパックにする」としていたが、ユーザーの条件「足したモジュールは VCV Rack でも使えること」を受けて、**普通の VCV Rack 2 のプラグイン**（`nova/plugin/`、「Nova Modular」）として作った。同じソースを Nova 用（アプリに同梱）と Mac の VCV Rack 用にビルドする。あわせて、モジュールを足すときの一覧で Mutable Instruments 由来のものが分かるようにした。結果は `status.md`。
 
 ## お願いすること
 
