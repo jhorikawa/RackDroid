@@ -212,7 +212,10 @@ android {
 		// same signing key, same everything. It is not a debuggable variant.
 		if (project.hasProperty("testBuild")) {
 			applicationIdSuffix = ".test"
-			manifestPlaceholders["appLabel"] = "RackDroid TEST"
+			// This fork's name on the home screen. The package name keeps
+			// the upstream ".test" suffix, so the build still installs over
+			// the copy that is already on a device and keeps its patches.
+			manifestPlaceholders["appLabel"] = "RackDroid Nova"
 			manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher_test"
 		}
 		else {
