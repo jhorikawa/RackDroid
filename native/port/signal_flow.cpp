@@ -19,6 +19,7 @@
  */
 #include <atomic>
 #include <cmath>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,7 @@
 #include "gamepad_nav.hpp"
 #include "signal_flow.hpp"
 #include "transport.hpp"
+#include "window_android.hpp"
 
 #include <jni.h>
 
@@ -55,14 +57,56 @@ static const float SPACING = 34.f;
 static const float SPEED = 62.f;
 /** The plug covers the end of the cable. */
 static const float END_GAP = 22.f;
+/** Over this much of it, at either end, an arrowhead grows and shrinks rather
+than appear and vanish. */
+static const float FADE = 11.f;
 /** Pieces the curve is measured in. */
 static const int STEPS = 18;
 
 
+/** What a cable's arrowheads remember from one frame to the next. Their place is
+kept as a part of the space between two of them, and moved on by a little each
+frame: worked out afresh from the time, a space that changed by a hundredth --
+the signal's level, the zoom -- threw the whole row about. */
+struct CableState {
+	float pos = 0.f;
+	int count = 0;
+	float level = 0.f;
+	float alpha = 0.f;
+	bool started = false;
+	int seen = 0;
+};
+
+static float follow(float now, float target, float dt, float seconds) {
+	return now + (target - now) * (1.f - std::exp(-dt / seconds));
+}
+
+
 struct SignalFlow : widget::Widget {
 	double lastTime = 0.0;
-	/** How far the arrowheads have travelled, in rack units. */
-	float travel = 0.f;
+	/** The time the arrowheads go by: the clock's, without the unevenness with
+	which frames come to be drawn. */
+	double clock = 0.0;
+	float period = 1.f / 60.f;
+	float dt = 0.f;
+	int frame = 0;
+	bool moving = false;
+	std::map<int64_t, CableState> states;
+
+	void tick() {
+		double now = system::getTime();
+		float real = lastTime > 0.0 ? (float) (now - lastTime) : 0.f;
+		lastTime = now;
+		if (clock <= 0.0 || real > 0.07f) {
+			clock = now;
+			dt = 0.f;
+			return;
+		}
+		period += (real - period) * 0.1f;
+		dt = period + (float) (now - clock - period) * 0.15f;
+		dt = math::clamp(dt, 0.f, 0.1f);
+		clock += dt;
+	}
 
 	/** The same sag the cable itself is drawn with (CableWidget.cpp). */
 	static math::Vec slumpOf(math::Vec a, math::Vec b) {
@@ -86,11 +130,9 @@ struct SignalFlow : widget::Widget {
 		app::RackWidget* rack = APP->scene ? APP->scene->rack : NULL;
 		if (!rack)
 			return;
-		double now = system::getTime();
-		float dt = lastTime > 0.0 ? math::clamp((float) (now - lastTime), 0.f, 0.1f) : 0.f;
-		lastTime = now;
-		if (!transportPaused())
-			travel = std::fmod(travel + SPEED * dt, 1e5f);
+		tick();
+		frame++;
+		moving = false;
 
 		// Physical pixels to a rack unit: zoomed out, the arrowheads keep a
 		// size that can be seen and stand further apart.
@@ -109,6 +151,12 @@ struct SignalFlow : widget::Widget {
 		for (app::CableWidget* cw : rack->getCompleteCables())
 			drawCable(args, cw, focused ? &focus : NULL, grow);
 		nvgRestore(args.vg);
+		if (moving)
+			windowNoteAnimation();
+		if (frame % 600 == 0) {
+			for (auto it = states.begin(); it != states.end();)
+				it = it->second.seen + 600 < frame ? states.erase(it) : std::next(it);
+		}
 	}
 
 	void drawCable(const DrawArgs& args, app::CableWidget* cw, const CableFocus* focus, float grow) {
@@ -135,9 +183,22 @@ struct SignalFlow : widget::Widget {
 		bool outgoing = focus && cable->outputModule->id == focus->moduleId
 			&& (focus->portType < 0 || (focus->portType == engine::Port::OUTPUT && cable->outputId == focus->portId));
 
+		CableState& st = states[cable->id];
+		st.seen = frame;
+		if (!st.started) {
+			st.started = true;
+			// Each cable at a phase of its own: in step, a bundle of them reads
+			// as one wave across instead of as many lines along.
+			st.pos = (float) ((uint64_t) cable->id % 97) / 97.f;
+			st.level = level;
+		}
+		// The lights in the plugs flicker with the sound. Up at once, down
+		// slowly: what is wanted is how strong the signal is, not its wave.
+		st.level = follow(st.level, level, dt, level > st.level ? 0.06f : 0.5f);
+
 		// Quiet signals should not vanish: half the range is spent on the
 		// first tenth of it.
-		float shown = std::sqrt(level);
+		float shown = std::sqrt(st.level);
 		float alpha = silent ? 0.22f : 0.45f + 0.55f * shown;
 		NVGcolor core = nvgRGB(0xFF, 0xFF, 0xFF);
 		if (incoming || outgoing) {
@@ -149,6 +210,8 @@ struct SignalFlow : widget::Widget {
 			// the rack should not flicker.
 			alpha *= 0.4f;
 		}
+		st.alpha = st.alpha <= 0.f ? alpha : follow(st.alpha, alpha, dt, 0.12f);
+		alpha = st.alpha;
 		float size = (3.1f + 1.7f * shown) * grow;
 		if (incoming || outgoing)
 			size *= 1.2f;
@@ -166,18 +229,26 @@ struct SignalFlow : widget::Widget {
 			at[i] = at[i - 1] + pts[i].minus(pts[i - 1]).norm();
 		}
 		float length = at[STEPS];
-		float gap = std::fmin(END_GAP - 14.f + size, length * 0.2f);
+		// Nothing here may depend on the signal: it is where they stand.
+		float gap = std::fmin(END_GAP - 14.f + 3.f * grow, length * 0.2f);
 		// A whole number of them, evenly spaced: the row moves on without ever
 		// leaving a short cable empty.
 		float usable = length - 2.f * gap;
 		if (usable <= 0.f)
 			return;
-		int count = (int) std::fmax(1.f, std::round(usable / (SPACING * grow)));
+		// One more or one fewer only once it is clearly called for, not back
+		// and forth about the middle.
+		float ideal = usable / (SPACING * grow);
+		if (st.count < 1 || std::fabs(ideal - st.count) > 0.7f)
+			st.count = (int) std::fmax(1.f, std::round(ideal));
+		int count = st.count;
 		float spacing = usable / count;
-		// Each cable at a phase of its own: in step, a bundle of them reads as
-		// one wave across instead of as many lines along.
-		float phase = (float) ((uint64_t) cable->id % 97) / 97.f * spacing;
-		float offset = std::fmod((silent ? 0.f : travel * grow) + phase, spacing);
+		if (!silent && !transportPaused()) {
+			st.pos += SPEED * grow * dt / spacing;
+			st.pos -= std::floor(st.pos);
+			moving = true;
+		}
+		float fade = std::fmin(FADE * grow, spacing * 0.4f);
 
 		nvgBeginPath(args.vg);
 		bool any = false;
@@ -193,17 +264,21 @@ struct SignalFlow : widget::Widget {
 			if (n <= 0.f)
 				return;
 			dir = dir.div(n);
+			float full = math::clamp(std::fmin(d - gap, gap + usable - d) / fade, 0.f, 1.f);
+			if (full < 0.1f)
+				return;
+			float s = size * full;
 			math::Vec side(-dir.y, dir.x);
-			math::Vec tip = p.plus(dir.mult(size * 0.6f));
-			math::Vec l = p.minus(dir.mult(size * 0.6f)).plus(side.mult(size));
-			math::Vec r = p.minus(dir.mult(size * 0.6f)).minus(side.mult(size));
+			math::Vec tip = p.plus(dir.mult(s * 0.6f));
+			math::Vec l = p.minus(dir.mult(s * 0.6f)).plus(side.mult(s));
+			math::Vec r = p.minus(dir.mult(s * 0.6f)).minus(side.mult(s));
 			nvgMoveTo(args.vg, l.x, l.y);
 			nvgLineTo(args.vg, tip.x, tip.y);
 			nvgLineTo(args.vg, r.x, r.y);
 			any = true;
 		};
 		for (int i = 0; i < count; i++)
-			arrow(gap + offset + i * spacing);
+			arrow(gap + (i + st.pos) * spacing);
 		if (!any)
 			return;
 		nvgStrokeColor(args.vg, nvgRGBAf(0.f, 0.f, 0.f, alpha * 0.75f));

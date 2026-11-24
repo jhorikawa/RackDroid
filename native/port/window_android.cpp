@@ -255,6 +255,9 @@ struct Window::Internal {
 	bool shouldClose = false;
 
 	double lastInteraction = 0.0;
+	double lastAnimation = 0.0;
+	/** What a frame costs to make, without the wait for the screen, evened out. */
+	double frameCost = 0.0;
 	int swapInterval = 1;
 
 	std::map<std::string, std::shared_ptr<Font>> fontCache;
@@ -499,6 +502,11 @@ void Window::step() {
 	// Battery: halve the frame rate (vsync/2) after a few seconds without
 	// touch interaction; back to full rate on the next touch.
 	int wantedInterval = (frameTime - internal->lastInteraction > 5.0) ? 2 : 1;
+	// Something is moving (the arrows on the cables): as long as frames are
+	// cheap, every one of them.
+	bool animating = frameTime - internal->lastAnimation < 0.5;
+	if (animating && internal->frameCost < 0.008)
+		wantedInterval = 1;
 	// Audio first. Rendering and the audio callback compete for the same
 	// cores, and some views cost far more to draw than others -- zoomed in
 	// close, every module is rasterised into a much larger framebuffer, which
@@ -538,7 +546,13 @@ void Window::step() {
 	// framebuffers waiting than one frame gets through): that is work with an
 	// end, and resting between its frames is what made it take minutes.
 	static const int PAINTING_BACKLOG = 8;
-	if (frameTime - internal->lastInteraction > 5.0 && work > 0.016 && internal->fbCount <= PAINTING_BACKLOG)
+	double waited = spent[rackdroid::RENDER_SWAP];
+	internal->frameCost += (work - waited - internal->frameCost) * 0.05;
+	// While something moves, waiting for the screen is not work: counting it,
+	// every few frames were followed by a rest of 70 ms, and what moved
+	// stuttered. A frame that is truly expensive still outlasts its turn.
+	double allowed = animating ? internal->swapInterval / 60.0 + 0.012 : 0.016;
+	if (frameTime - internal->lastInteraction > 5.0 && work > allowed && internal->fbCount <= PAINTING_BACKLOG)
 		std::this_thread::sleep_for(std::chrono::duration<double>(work < 0.075 ? 2.0 * work : 0.15));
 }
 
@@ -813,6 +827,13 @@ void windowNoteInteraction() {
 	rack::window::Window* w = APP->window;
 	if (w)
 		w->internal->lastInteraction = rack::system::getTime();
+}
+
+
+void windowNoteAnimation() {
+	rack::window::Window* w = APP->window;
+	if (w)
+		w->internal->lastAnimation = rack::system::getTime();
 }
 
 

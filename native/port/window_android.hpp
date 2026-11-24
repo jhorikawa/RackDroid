@@ -33,6 +33,10 @@ void windowSetAudioStressed(bool stressed);
 half after a few idle seconds to save battery). */
 void windowNoteInteraction();
 
+/** Something on the screen is moving that would be seen to stutter: an idle
+screen goes on being drawn evenly. Call from each frame that draws it. */
+void windowNoteAnimation();
+
 /** Seconds since the last touch, or a large number if there has never been
 one. The engine's underrun machinery uses it to keep out of the way while the
 rack is being handled: a pinch-zoom or a drag makes the render thread crowd
