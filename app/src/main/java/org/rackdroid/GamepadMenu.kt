@@ -77,6 +77,7 @@ class GamepadMenu(
 		const val CMD_MODULE_MENU = 1
 		const val CMD_MOVE_MODULE = 2
 		const val CMD_DELETE_MODULE = 3
+		const val CMD_CYCLE_ZOOM = 4
 
 		// Icons as SVG path data on a 24 x 24 grid. The filled ones are
 		// Material Design icons (Apache 2.0), the family the toolbar's own

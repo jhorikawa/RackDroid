@@ -1972,7 +1972,8 @@ class MainActivity : NativeActivity() {
 	private val chatSettings: ChatSettings by lazy { ChatSettings(novaPrefs) }
 	private val chatPanel: ChatPanel by lazy {
 		ChatPanel(this, patchServer, TermuxBridge(this, patchServer), chatSettings, gamepadMenu,
-			togglePause = { nativeTransportToggle() })
+			togglePause = { nativeTransportToggle() },
+			cycleZoom = { nativeGamepadCommand(GamepadMenu.CMD_CYCLE_ZOOM) })
 	}
 
 	/** The handheld's tilt and a touch pad, as voltages for the patch

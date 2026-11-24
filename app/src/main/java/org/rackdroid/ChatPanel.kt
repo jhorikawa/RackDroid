@@ -13,7 +13,9 @@ import android.os.SystemClock
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
@@ -42,6 +44,9 @@ import org.json.JSONObject
  *   reading   D-pad up and down scroll, Y stops the answer or takes back the
  *             last one, X chooses the model and the effort, A goes to typing
  *
+ * In both the left stick and the triggers go on panning and zooming the rack, and
+ * SELECT pauses it, or held cycles the zoom, as they do without the panel.
+ *
  * B puts the panel away; what is being answered goes on. The conversation lasts
  * as long as the app does.
  */
@@ -52,12 +57,16 @@ class ChatPanel(
 	private val settings: ChatSettings,
 	private val menu: GamepadMenu,
 	private val togglePause: () -> Unit,
+	private val cycleZoom: () -> Unit,
 ) {
 	private companion object {
 		const val WIDTH_DP = 300
 		/** How long Claude Code may take to come up. */
 		const val START_MS = 25000L
 		const val MAX_MESSAGES = 60
+		/** As in gamepad_nav.cpp. */
+		const val SELECT_HOLD_MS = 400L
+		const val HAT_THRESHOLD = 0.5f
 	}
 
 	private enum class Who { USER, CLAUDE, NOTE }
@@ -483,7 +492,7 @@ class ChatPanel(
 			typing -> "A type   Y erase   START send   X read   B close"
 			working -> "↑↓ scroll   X model   Y stop   B close, it goes on"
 			else -> "A type   X model   Y undo the answer   B close"
-		}
+		} + "\nL stick  move the rack   L2 R2  zoom"
 	}
 
 	private fun go(toTyping: Boolean) {
@@ -607,7 +616,10 @@ class ChatPanel(
 			addView(help)
 		}
 		root.viewTreeObserver.addOnGlobalLayoutListener {
-			val shown = ViewCompat.getRootWindowInsets(root)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+			val insets = ViewCompat.getRootWindowInsets(root)
+			val shown = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
+			if (showing)
+				nativeChatInset(dp(WIDTH_DP), if (shown) insets!!.getInsets(WindowInsetsCompat.Type.ime()).bottom else 0)
 			if (shown != imeShown) {
 				imeShown = shown
 				// Put away by its own key or a swipe: back to reading. Come up
@@ -621,7 +633,19 @@ class ChatPanel(
 			}
 		}
 
-		val d = Dialog(activity)
+		val d = object : Dialog(activity) {
+			override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+				stick(ev)
+				return super.dispatchGenericMotionEvent(ev)
+			}
+
+			/** The stick let go goes to whatever window has the focus by then. */
+			override fun onWindowFocusChanged(hasFocus: Boolean) {
+				super.onWindowFocusChanged(hasFocus)
+				if (!hasFocus)
+					stickAtRest()
+			}
+		}
 		dialog = d
 		d.requestWindowFeature(Window.FEATURE_NO_TITLE)
 		d.setContentView(root)
@@ -631,7 +655,8 @@ class ChatPanel(
 			draft = input.text.toString()
 			dialog = null
 			imeShown = false
-			nativeChatInset(0)
+			stickAtRest()
+			nativeChatInset(0, 0)
 		}
 		d.window?.apply {
 			setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -646,7 +671,7 @@ class ChatPanel(
 		}
 		d.show()
 		d.window?.setLayout(dp(WIDTH_DP), ViewGroup.LayoutParams.MATCH_PARENT)
-		nativeChatInset(dp(WIDTH_DP))
+		nativeChatInset(dp(WIDTH_DP), 0)
 		messages.forEach { add(it) }
 		greet()
 		input.requestFocus()
@@ -686,10 +711,61 @@ class ChatPanel(
 				.hideSoftInputFromWindow(input.windowToken, 0)
 	}
 
+	private var hatX = 0f
+	private var hatY = 0f
+
+	/** The left stick and the triggers are the rack's, whatever has the keys. */
+	private fun stick(ev: MotionEvent) {
+		if (!ev.isFromSource(InputDevice.SOURCE_JOYSTICK) || ev.action != MotionEvent.ACTION_MOVE)
+			return
+		hatX = ev.getAxisValue(MotionEvent.AXIS_HAT_X)
+		hatY = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
+		val l2 = maxOf(ev.getAxisValue(MotionEvent.AXIS_BRAKE), ev.getAxisValue(MotionEvent.AXIS_LTRIGGER))
+		val r2 = maxOf(ev.getAxisValue(MotionEvent.AXIS_GAS), ev.getAxisValue(MotionEvent.AXIS_RTRIGGER))
+		nativeChatStick(ev.getAxisValue(MotionEvent.AXIS_X), ev.getAxisValue(MotionEvent.AXIS_Y), r2 - l2)
+	}
+
+	private fun stickAtRest() {
+		ui.removeCallbacks(selectLong)
+		hatX = 0f
+		hatY = 0f
+		nativeChatStick(0f, 0f, 0f)
+	}
+
+	/** The D-pad keys that are held because the left stick is. */
+	private val fromStick = HashSet<Int>()
+
+	/** Android makes D-pad keys of a stick that nobody has taken, as it does of a
+	 * D-pad that is an axis (the Nova's). Only the latter are meant. */
+	private fun madeOfStick(code: Int, event: KeyEvent): Boolean {
+		if (code !in KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_RIGHT || event.flags and KeyEvent.FLAG_FALLBACK == 0 ||
+			!event.isFromSource(InputDevice.SOURCE_JOYSTICK))
+			return false
+		if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+			val dpad = when (code) {
+				KeyEvent.KEYCODE_DPAD_UP -> hatY < -HAT_THRESHOLD
+				KeyEvent.KEYCODE_DPAD_DOWN -> hatY > HAT_THRESHOLD
+				KeyEvent.KEYCODE_DPAD_LEFT -> hatX < -HAT_THRESHOLD
+				else -> hatX > HAT_THRESHOLD
+			}
+			if (dpad) fromStick.remove(code) else fromStick.add(code)
+		}
+		return if (event.action == KeyEvent.ACTION_UP) fromStick.remove(code) else code in fromStick
+	}
+
+	/** SELECT: let go it pauses, held it cycles the zoom. */
+	private var selectHeld = false
+	private val selectLong = Runnable {
+		selectHeld = true
+		cycleZoom()
+	}
+
 	/** A release only counts if this window saw the press: see GamepadMenu. */
 	private val pressedHere = HashSet<Int>()
 
 	private fun key(code: Int, event: KeyEvent): Boolean {
+		if (madeOfStick(code, event))
+			return true
 		val down = event.action == KeyEvent.ACTION_DOWN
 		val first = down && event.repeatCount == 0
 		val released = if (down) {
@@ -735,7 +811,18 @@ class ChatPanel(
 			KeyEvent.KEYCODE_BUTTON_START -> if (released) {
 				if (typing) ask() else if (!working) go(true)
 			}
-			KeyEvent.KEYCODE_BUTTON_SELECT -> if (released) togglePause()
+			KeyEvent.KEYCODE_BUTTON_SELECT -> {
+				if (first) {
+					selectHeld = false
+					ui.postDelayed(selectLong, SELECT_HOLD_MS)
+				} else if (released) {
+					ui.removeCallbacks(selectLong)
+					if (!selectHeld)
+						togglePause()
+				}
+			}
+			// They come along with the triggers' axes, which are what is read.
+			KeyEvent.KEYCODE_BUTTON_L2, KeyEvent.KEYCODE_BUTTON_R2 -> {}
 			KeyEvent.KEYCODE_BUTTON_L1 -> if (down) scroll.smoothScrollBy(0, -scroll.height * 3 / 4)
 			KeyEvent.KEYCODE_BUTTON_R1 -> if (down) scroll.smoothScrollBy(0, scroll.height * 3 / 4)
 			KeyEvent.KEYCODE_BACK -> if (released) {
@@ -746,5 +833,6 @@ class ChatPanel(
 		return true
 	}
 
-	private external fun nativeChatInset(px: Int)
+	private external fun nativeChatInset(right: Int, bottom: Int)
+	private external fun nativeChatStick(x: Float, y: Float, zoom: Float)
 }

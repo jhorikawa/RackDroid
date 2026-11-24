@@ -32,8 +32,13 @@ void gamepadNavFocusModule(int64_t moduleId);
 The focus stays where it is. A touch or a button stops it. */
 void gamepadNavShow(int64_t moduleId);
 
-/** Any thread: this many pixels on the right are covered (by the chat). */
-void gamepadNavRightInset(int px);
+/** Any thread: this many pixels on the right are covered by the chat's panel, and
+at the bottom by its keyboard. */
+void gamepadNavPanelInset(int rightPx, int bottomPx);
+
+/** Any thread: the left stick, and the triggers (R2 less L2), while the chat's
+panel has the controller. */
+void gamepadNavPanelStick(float panX, float panY, float zoom);
 
 /** What the cables should be told apart for (signal_flow.cpp): the module
 selected, or the module and jack focused. False when there is neither. */

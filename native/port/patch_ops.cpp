@@ -1338,6 +1338,11 @@ Java_org_rackdroid_PatchServer_nativePatchOp(JNIEnv* env, jobject, jbyteArray re
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_rackdroid_ChatPanel_nativeChatInset(JNIEnv*, jobject, jint px) {
-	rackdroid::gamepadNavRightInset((int) px);
+Java_org_rackdroid_ChatPanel_nativeChatInset(JNIEnv*, jobject, jint right, jint bottom) {
+	rackdroid::gamepadNavPanelInset((int) right, (int) bottom);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_rackdroid_ChatPanel_nativeChatStick(JNIEnv*, jobject, jfloat x, jfloat y, jfloat zoom) {
+	rackdroid::gamepadNavPanelStick(x, y, zoom);
 }

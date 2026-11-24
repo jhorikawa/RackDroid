@@ -179,7 +179,7 @@ static const float ZOOM_LEVELS[] = {1.f, 2.f, 0.5f};
 
 /** Asked for from GamepadMenu.kt on the UI thread, carried out here on the
 render thread. Matches the constants there. */
-enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1, CMD_MOVE_MODULE = 2, CMD_DELETE_MODULE = 3 };
+enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1, CMD_MOVE_MODULE = 2, CMD_DELETE_MODULE = 3, CMD_CYCLE_ZOOM = 4 };
 static std::atomic<int> g_command{CMD_NONE};
 
 /** The focused module's model ("plugin/model"), for the UI thread to ask. */
@@ -389,6 +389,13 @@ static void setFocus(const Focus& f) {
 
 /** What the chat's panel covers on the right, in pixels. */
 static std::atomic<int> g_rightInsetPx{0};
+/** What its keyboard covers at the bottom. */
+static std::atomic<int> g_bottomInsetPx{0};
+/** The left stick and the triggers (R2 less L2) while the panel has the
+controller: it passes them on, and nothing else of it. */
+static std::atomic<float> g_panelPanX{0.f};
+static std::atomic<float> g_panelPanY{0.f};
+static std::atomic<float> g_panelZoom{0.f};
 /** The module to be brought into view though nothing has the focus, or -1. */
 static int64_t g_shown = -1;
 
@@ -400,6 +407,8 @@ static math::Rect clearView() {
 	math::Vec o = rs->getAbsoluteOffset(math::Vec(0.f, 0.f));
 	float top = std::fmax(o.y, cableParkTopInset());
 	float bottom = o.y + rs->box.size.y - BOTTOM_INSET;
+	if (APP->window)
+		bottom = std::fmin(bottom, o.y + rs->box.size.y - g_bottomInsetPx.load(std::memory_order_relaxed) / APP->window->pixelRatio);
 	if (bottom < top)
 		top = bottom = (top + bottom) * 0.5f;
 	// The cable bar stands along the left edge, unless it is folded up.
@@ -1002,6 +1011,15 @@ static void pressY() {
 }
 
 
+/** Where zooming keeps the rack in place: the middle of the view, or of what the
+chat's panel leaves of it. */
+static math::Vec zoomPivot(app::RackScrollWidget* rs) {
+	if (g_rightInsetPx.load(std::memory_order_relaxed) <= 0)
+		return rs->getSize().div(2.f);
+	return clearView().getCenter().minus(rs->getAbsoluteOffset(math::Vec(0.f, 0.f)));
+}
+
+
 static void cycleZoom() {
 	app::RackScrollWidget* rs = APP->scene ? APP->scene->rackScroll : NULL;
 	if (!rs)
@@ -1017,8 +1035,11 @@ static void cycleZoom() {
 			at = i;
 		}
 	}
-	rs->setZoom(ZOOM_LEVELS[(at + 1) % n]);
-	g_follow = true;
+	rs->setZoom(ZOOM_LEVELS[(at + 1) % n], zoomPivot(rs));
+	g_shown = -1;
+	// Beside the chat's panel nothing is being done at the focus.
+	g_follow = g_rightInsetPx.load(std::memory_order_relaxed) <= 0;
+	windowNoteInteraction();
 }
 
 
@@ -1229,8 +1250,16 @@ void gamepadNavShow(int64_t moduleId) {
 }
 
 
-void gamepadNavRightInset(int px) {
-	g_rightInsetPx.store(px, std::memory_order_relaxed);
+void gamepadNavPanelInset(int rightPx, int bottomPx) {
+	g_rightInsetPx.store(rightPx, std::memory_order_relaxed);
+	g_bottomInsetPx.store(bottomPx, std::memory_order_relaxed);
+}
+
+
+void gamepadNavPanelStick(float panX, float panY, float zoom) {
+	g_panelPanX.store(panX, std::memory_order_relaxed);
+	g_panelPanY.store(panY, std::memory_order_relaxed);
+	g_panelZoom.store(zoom, std::memory_order_relaxed);
 }
 
 
@@ -1347,23 +1376,27 @@ static void panAndZoom(float dt) {
 	app::RackScrollWidget* rs = APP->scene->rackScroll;
 	if (!rs)
 		return;
-	math::Vec pan(shapeStick(gamepadAxis(PAD_LX)), shapeStick(gamepadAxis(PAD_LY)));
+	math::Vec pan(shapeStick(gamepadAxis(PAD_LX) + g_panelPanX.load(std::memory_order_relaxed)),
+		shapeStick(gamepadAxis(PAD_LY) + g_panelPanY.load(std::memory_order_relaxed)));
 	if (pan.x != 0.f || pan.y != 0.f) {
 		// A screen and a half a second at full tilt, at any zoom.
 		float speed = std::fmax(rs->box.size.x, rs->box.size.y) * 1.5f;
 		rs->offset = rs->offset.plus(pan.mult(speed * dt));
+		g_shown = -1;
 		g_follow = false;
 		g_viewMoved = true;
 		windowNoteInteraction();
 	}
-	float pull = shapeTrigger(gamepadAxis(PAD_R2)) - shapeTrigger(gamepadAxis(PAD_L2));
+	float panel = g_panelZoom.load(std::memory_order_relaxed);
+	float pull = shapeTrigger(gamepadAxis(PAD_R2) + std::fmax(panel, 0.f)) - shapeTrigger(gamepadAxis(PAD_L2) + std::fmax(-panel, 0.f));
 	if (pull != 0.f) {
 		float zoom = rs->getZoom();
 		// Two octaves end to end (0.5x to 2x) in a little over a second.
 		float next = math::clamp(zoom * std::pow(2.f, pull * 1.6f * dt), 0.25f, MAX_RACK_ZOOM);
 		if (next != zoom) {
-			rs->setZoom(next);
+			rs->setZoom(next, zoomPivot(rs));
 			touchNoteZooming();
+			g_shown = -1;
 			g_follow = false;
 			g_viewMoved = true;
 		}
@@ -1475,6 +1508,7 @@ void gamepadNavStep() {
 
 	switch (g_command.exchange(CMD_NONE)) {
 		case CMD_MODULE_MENU: openModuleMenu(); break;
+		case CMD_CYCLE_ZOOM: cycleZoom(); break;
 		case CMD_MOVE_MODULE:
 			if (rackWidget()->getModule(g_focus.moduleId)) {
 				g_active = true;
