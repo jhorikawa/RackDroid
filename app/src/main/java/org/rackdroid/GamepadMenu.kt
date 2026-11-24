@@ -18,6 +18,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.graphics.PathParser
 import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Menus for a game controller (gamepad_nav.cpp): START opens the main menu, X
@@ -61,6 +62,9 @@ class GamepadMenu(
 	/** The key of the focused module's model, or "" (gamepad_nav.cpp). */
 	private val focusedModel: () -> String,
 	private val openChat: () -> Unit,
+	/** An operation on the modules made on this device (MadeModules), off the
+	 * UI thread; what came of it comes back on it. */
+	private val made: (JSONObject, (String) -> Unit) -> Unit,
 ) {
 	companion object {
 		const val MAIN = 0
@@ -107,6 +111,7 @@ class GamepadMenu(
 		private const val LINE_CHECKED = "M4,4 H20 V20 H4 Z M7.5,12 L11,15.5 L17,8.5"
 		private const val LINE_FLOW = "M3,6 L9,12 L3,18 M9,6 L15,12 L9,18 M15,6 L21,12 L15,18"
 		private const val LINE_CHAT = "M3,4 H21 V16 H11 L6,21 V16 H3 Z M8,10 h0.01 M12,10 h0.01 M16,10 h0.01"
+		private const val LINE_MADE = "M4,20 L14,10 M12,8 L16,12 M13,3 L21,11 L18,14 L10,6 Z"
 		private const val LINE_MISC = "M5,12 h0.01 M12,12 h0.01 M19,12 h0.01"
 		private const val LINE_MUTABLE = "M4,19 V5 L12,14 L20,5 V19"
 	}
@@ -209,12 +214,50 @@ class GamepadMenu(
 	internal fun choiceRow(label: String, chosen: Boolean, note: String? = null) =
 		PadRow(label, line(if (chosen) LINE_CHECKED else LINE_BOX), note = note)
 
+	/** The modules made here: to stop one, to go back, to take one away. */
+	private fun showMade(start: Int = 0) {
+		val all = MadeModules.rows(activity)
+		if (all.isEmpty()) {
+			Toast.makeText(activity, "None has been made yet: ask the chat for one.", Toast.LENGTH_SHORT).show()
+			return
+		}
+		list("Made modules", all.map {
+			PadRow("${it.name}   ·   version ${it.version}", line(if (it.off) LINE_BOX else LINE_CHECKED),
+				note = if (it.why.isEmpty()) null else "STOPPED: ${it.why}")
+		}, start, onBack = { showMain() }) { showMade(all[it], it) }
+	}
+
+	private fun showMade(m: MadeModules.Row, at: Int) {
+		fun run(o: JSONObject) = made(o.put("slug", m.id)) { said ->
+			Toast.makeText(activity, said, Toast.LENGTH_LONG).show()
+			if (MadeModules.rows(activity).isNotEmpty())
+				showMade(at)
+		}
+		val rows = ArrayList<Pair<PadRow, () -> Unit>>()
+		rows.add(PadRow(if (m.off) "Start" else "Stop", res(if (m.off) R.drawable.ic_tb_play else R.drawable.ic_tb_pause),
+			note = if (m.off) "It will run again" else "Its place and its cables stay") to {
+			run(JSONObject().put("op", "made_switch").put("on", m.off))
+		})
+		for (v in m.versions.reversed().filter { it != m.version })
+			rows.add(PadRow("Go back to version $v", res(R.drawable.ic_tb_undo)) to {
+				run(JSONObject().put("op", "made_revert").put("version", v))
+			})
+		rows.add(PadRow("Remove…", res(R.drawable.ic_tb_delete), note = "Only while it is not in the patch") to {
+			list("Remove ${m.name} for good?", listOf(PadRow("Keep it", line(LINE_BOX)), PadRow("Remove it", res(R.drawable.ic_tb_delete))),
+				onBack = { showMade(m, at) }) {
+				if (it == 1) run(JSONObject().put("op", "made_remove")) else showMade(m, at)
+			}
+		})
+		list(m.name, rows.map { it.first }, onBack = { showMade(at) }) { rows[it].second() }
+	}
+
 	private fun showMain() {
 		val items = listOf<Pair<PadRow, () -> Unit>>(
 			if (paused()) PadRow("Play", res(R.drawable.ic_tb_play)) to { togglePause() }
 			else PadRow("Pause", res(R.drawable.ic_tb_pause)) to { togglePause() },
 			PadRow("Chat…", line(LINE_CHAT)) to { openChat() },
 			PadRow("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
+			PadRow("Made modules…", line(LINE_MADE)) to { showMade() },
 			PadRow("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
 			PadRow("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
 			PadRow("Tags of this module…", line(LINE_TAG)) to { showFocusedTags() },
@@ -299,6 +342,8 @@ class GamepadMenu(
 		// are called: first, because their names are the ones that give no
 		// hint of what they are.
 		category(MUTABLE, line(LINE_MUTABLE), entries.filter { it.origin != null })
+		// Those made on this device, from the chat.
+		category("MADE", line(LINE_MADE), entries.filter { it.key.startsWith(MadeModules.PLUGIN + "/") })
 		for ((label, icon, pred) in tagCategories)
 			category(label, if (icon.isEmpty()) fill(FILL_TOOLS) else line(icon), entries.filter(pred))
 		category("MISC", line(LINE_MISC), entries.filter { e -> tagCategories.none { (_, _, pred) -> pred(e) } })

@@ -1,0 +1,11 @@
+// What libc++ does where one of its checks fails, in place of its own header of
+// this name: the same, but each check keeps a trap of its own, so that it can be
+// told on which line it was (nova_build.py). GPL-3.0-or-later.
+
+#pragma once
+
+[[gnu::always_inline]] inline void __nova_check_failed() {
+	[[clang::nomerge]] __builtin_trap();
+}
+
+#define _LIBCPP_ASSERTION_HANDLER(message) ((void) message, __nova_check_failed())

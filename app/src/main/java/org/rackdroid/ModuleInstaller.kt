@@ -74,6 +74,8 @@ object ModuleInstaller {
 		installedDir(activity).listFiles { f -> f.isDirectory }?.forEach { dir ->
 			if (loadInstalled(activity, dir)) loaded++
 		}
+		runCatching { MadeModules.loadAll(activity) }
+			.onFailure { jlog("made modules: $it") }
 		librariesLoaded = true
 		jlog("loadUserPlugins: readme ${tImport - tReadme} ms, import ${tLoad - tImport} ms, " +
 			"load ${android.os.SystemClock.uptimeMillis() - tLoad} ms ($loaded packs)")

@@ -73,12 +73,18 @@ class ChatPanel(
 		var actions = 0
 		var moved = 0
 		val files = ArrayList<String>()
+		/** Modules made or changed, and what was called with which. */
+		val made = ArrayList<String>()
+		val making = HashMap<String, String>()
+		var refused = 0
 		var listened = false
 		var undid = false
 		var view: TextView? = null
 
 		fun work(): String {
 			val parts = ArrayList<String>()
+			if (refused > 0) parts.add("$refused attempt${if (refused > 1) "s" else ""} refused")
+			parts.addAll(made)
 			if (added.isNotEmpty()) parts.add(added.joinToString(" ") { "+$it" })
 			if (removed > 0) parts.add("−$removed module${if (removed > 1) "s" else ""}")
 			if (cables > 0) parts.add("$cables cable${if (cables > 1) "s" else ""}")
@@ -103,6 +109,9 @@ class ChatPanel(
 	private var unsent: String? = null
 	private var startedAt = 0L
 	private var draft = ""
+	/** What it is at, if it is something that takes long, and since when. */
+	private var doing: String? = null
+	private var doingSince = 0L
 
 	private var dialog: Dialog? = null
 	private lateinit var list: LinearLayout
@@ -191,9 +200,28 @@ class ChatPanel(
 				it.text += o.optString("text")
 				show(it)
 			}
+			"doing" -> when (o.optString("name")) {
+				"make_module" -> now("Writing a module")
+				"edit_module" -> now("Changing a module")
+				// What it asks for along with that does not come first.
+				else -> if (answer?.making.isNullOrEmpty()) now(null)
+			}
 			"tool" -> answer?.let {
-				count(it, o.optString("name"), o.optJSONObject("args") ?: JSONObject())
+				val name = o.optString("name")
+				val args = o.optJSONObject("args") ?: JSONObject()
+				if (name == "make_module" || name == "edit_module") {
+					it.making[o.optString("id")] = (if (name == "make_module") "made " else "changed ") + args.optString("id")
+					now("Compiling and testing ${args.optString("id")}")
+				}
+				count(it, name, args)
 				show(it)
+			}
+			"tool_done" -> answer?.let {
+				it.making.remove(o.optString("id"))?.let { what ->
+					if (o.optBoolean("ok")) it.made.add(what) else it.refused++
+					now(if (o.optBoolean("ok")) null else "Putting it right")
+					show(it)
+				}
 			}
 			"done" -> {
 				val m = answer
@@ -208,6 +236,11 @@ class ChatPanel(
 			"error" -> finish(o.optString("text"))
 		}
 		refreshStatus()
+	}
+
+	private fun now(what: String?) {
+		doing = what
+		doingSince = SystemClock.uptimeMillis()
 	}
 
 	private fun count(m: Message, tool: String, args: JSONObject) {
@@ -227,6 +260,9 @@ class ChatPanel(
 			"move_modules" -> m.moved += size("moves")
 			"save_patch" -> m.files.add("save")
 			"open_patch" -> m.files.add("open")
+			"revert_module" -> m.made.add("went back to version ${args.optInt("version")} of ${args.optString("id")}")
+			"switch_module" -> m.made.add((if (args.optBoolean("on")) "started " else "stopped ") + args.optString("id"))
+			"remove_made" -> m.made.add("removed ${args.optString("id")}")
 			"play" -> m.files.add(if (args.optBoolean("on")) "play" else "pause")
 			"listen" -> m.listened = true
 			"undo" -> m.undid = true
@@ -237,6 +273,7 @@ class ChatPanel(
 		val m = answer
 		answer = null
 		stopping = false
+		doing = null
 		if (m != null) {
 			if (problem != null)
 				m.text = (m.text.trim() + "\n" + problem).trim()
@@ -301,12 +338,18 @@ class ChatPanel(
 		val rows = listOf(
 			PadRow("Model: ${settings.modelName}", note = "What answers"),
 			PadRow("Effort: ${settings.effort}", note = "How long it thinks about each answer"),
-			PadRow("Keyboard: ${if (settings.padKeyboard) "D-pad" else "Android"}", note = "What you type with"))
+			PadRow("Keyboard: ${if (settings.padKeyboard) "D-pad" else "Android"}", note = "What you type with"),
+			PadRow("Making modules: ${if (settings.making) "on" else "off"}", note = "Writing new ones, compiled and tested in Termux"))
 		menu.choose("Chat", rows, 0) {
 			when (it) {
 				0 -> showModels()
 				1 -> showEfforts()
-				else -> showKeyboards()
+				2 -> showKeyboards()
+				else -> {
+					settings.making = !settings.making
+					server.toBridge(JSONObject().put("settings", settings.json()))
+					note("From the next message: making modules is ${if (settings.making) "on" else "off"}.")
+				}
 			}
 		}
 	}
@@ -418,7 +461,8 @@ class ChatPanel(
 
 	private fun greet() {
 		if (messages.isEmpty())
-			note("Say what the patch should do. Claude adds modules, patches cables and turns knobs. Each answer is one step of Undo.")
+			note("Say what the patch should do. Claude adds modules, patches cables and turns knobs" +
+				(if (settings.making) ", and makes a module that is not there." else ".") + " Each answer is one step of Undo.")
 	}
 
 	private fun refreshStatus() {
@@ -427,6 +471,7 @@ class ChatPanel(
 		status.text = when {
 			stopping -> "Stopping…"
 			working && unsent != null -> "Starting Claude Code…"
+			working && doing != null -> "$doing… ${(SystemClock.uptimeMillis() - doingSince) / 1000} s"
 			working -> "Working… ${(SystemClock.uptimeMillis() - askedAt) / 1000} s"
 			server.bridgeConnected -> "${settings.modelName} · ${settings.effort} ▾"
 			startedAt > 0L -> "Starting Claude Code…"

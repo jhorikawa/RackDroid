@@ -51,6 +51,9 @@ class PatchServer(
 		private const val FILE = "chat-link.json"
 		private const val MAX_CLIENTS = 8
 		private const val MAX_LINE = 256 * 1024
+		/** From whom has shown that it knows the token: a made module's library
+		 * comes as one line. */
+		private const val MAX_LINE_KNOWN = 16 * 1024 * 1024
 		/** More models than this are not listed whole, only searched. */
 		private const val MAX_CATALOG = 500
 		private const val MAX_FOUND = 15
@@ -214,7 +217,7 @@ class PatchServer(
 					it.close()
 				}
 			while (true) {
-				val line = readLine(reader) ?: break
+				val line = readLine(reader, MAX_LINE_KNOWN) ?: break
 				if (line.isBlank())
 					continue
 				handle(client, JSONObject(line))
@@ -230,7 +233,7 @@ class PatchServer(
 		}
 	}
 
-	private fun readLine(reader: BufferedReader): String? {
+	private fun readLine(reader: BufferedReader, most: Int = MAX_LINE): String? {
 		val sb = StringBuilder()
 		while (true) {
 			val c = reader.read()
@@ -238,7 +241,7 @@ class PatchServer(
 				return if (sb.isEmpty()) null else sb.toString()
 			if (c == '\n'.code)
 				return sb.toString()
-			if (sb.length >= MAX_LINE)
+			if (sb.length >= most)
 				throw IllegalStateException("line too long")
 			sb.append(c.toChar())
 		}
@@ -270,11 +273,19 @@ class PatchServer(
 
 	/* ---- Operations ---- */
 
-	private fun operate(o: JSONObject): String = when (o.getString("op")) {
-		"find" -> onUi { answer(find(o.optString("query"))) }
-		"catalog" -> onUi { answer(catalog()) }
-		else -> String(nativePatchOp(o.toString().toByteArray()))
+	private fun operate(o: JSONObject): String {
+		val op = o.getString("op")
+		return when {
+			op == "find" -> onUi { answer(find(o.optString("query"))) }
+			op == "catalog" -> onUi { answer(catalog()) }
+			op.startsWith("made_") -> made(o)
+			else -> String(nativePatchOp(o.toString().toByteArray()))
+		}
 	}
+
+	/** Modules made on this device. Not on the UI thread. */
+	fun made(o: JSONObject): String = MadeModules.operate(activity, o,
+		{ JSONObject(String(nativePatchOp(it.toString().toByteArray()))) }, requestBuild)
 
 	private fun answer(text: String) = JSONObject().put("ok", true).put("text", text).toString()
 

@@ -85,7 +85,8 @@ class ModulePalette(
 		// The Mutable Instruments ports, under whatever name and from
 		// whichever pack (MutableOrigin): their own names do not say.
 		listOf<Pair<String, (Entry) -> Boolean>>(
-			"MUTABLE" to { e -> MutableOrigin.of(e.key, e.description) != null }) +
+			"MUTABLE" to { e -> MutableOrigin.of(e.key, e.description) != null },
+			"MADE" to { e -> e.key.startsWith(MadeModules.PLUGIN + "/") }) +
 		tagCategories +
 		listOf<Pair<String, (Entry) -> Boolean>>(
 			MISC_CHIP to { e -> tagCategories.none { (_, pred) -> pred(e) } })
@@ -372,6 +373,8 @@ class ModulePalette(
 		}
 		chipRow.addView(searchButton)
 		for ((label, pred) in categories) {
+			if (label == "MADE" && MadeModules.ids(activity).isEmpty())
+				continue
 			chipRow.addView(TextView(activity).apply {
 				text = label
 				contentDescription = activity.getString(R.string.palette_category, label)

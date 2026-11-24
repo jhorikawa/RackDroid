@@ -253,6 +253,8 @@ class MainActivity : NativeActivity() {
 			.putLong("started_at", now)
 			.putInt("failures", failures)
 			.commit()
+		if (startupRecoveryActive)
+			runCatching { MadeModules.recover(this) }
 		nativeSetStartupOptions(startupRecoveryActive, startupRecoveryActive)
 		// Only Help > Language ever writes this, so an empty value tells the
 		// engine that nobody has chosen and it may follow the device. Pushed
@@ -1951,7 +1953,13 @@ class MainActivity : NativeActivity() {
 				nativeSetSignalFlow(it)
 			},
 			focusedModel = { nativeGamepadFocusedModel() },
-			openChat = { chatPanel.toggle() })
+			openChat = { chatPanel.toggle() },
+			made = { o, said ->
+				Thread {
+					val r = org.json.JSONObject(patchServer.made(o))
+					uiHandler.post { said(if (r.optBoolean("ok")) r.optString("text") else r.optString("error")) }
+				}.start()
+			})
 	}
 
 	/** The chat and what answers it: ChatPanel.kt, PatchServer.kt. */
@@ -3215,6 +3223,7 @@ class MainActivity : NativeActivity() {
 			runCatching { nativeBrowserRequestBuild() }
 			runCatching { modulePalette.show() }
 			showStartupRecoveryDialog()
+			MadeModules.takeNotice()?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
 			runCatching { remindLoweredSampleRate() }
 		}
 	}

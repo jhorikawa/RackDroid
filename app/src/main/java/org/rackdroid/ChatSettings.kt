@@ -32,11 +32,16 @@ class ChatSettings(private val prefs: SharedPreferences) {
 		get() = prefs.getBoolean("chatPadKeyboard", false)
 		set(on) = prefs.edit().putBoolean("chatPadKeyboard", on).apply()
 
+	/** May make modules (nova/kit), not only use those that are there. */
+	var making: Boolean
+		get() = prefs.getBoolean("chatMaking", true)
+		set(on) = prefs.edit().putBoolean("chatMaking", on).apply()
+
 	private fun known(all: List<Choice>, id: String?, otherwise: String) =
 		if (all.any { it.id == id }) id!! else otherwise
 
 	fun set(model: String, effort: String) =
 		prefs.edit().putString("chatModel", model).putString("chatEffort", effort).apply()
 
-	fun json(): JSONObject = JSONObject().put("model", model).put("effort", effort)
+	fun json(): JSONObject = JSONObject().put("model", model).put("effort", effort).put("making", making)
 }

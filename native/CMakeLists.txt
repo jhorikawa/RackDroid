@@ -429,6 +429,9 @@ if(RACKDROID_UI)
 			${CMAKE_CURRENT_SOURCE_DIR}/port/transport.cpp
 			# The patch read and changed by request, for the chat.
 			${CMAKE_CURRENT_SOURCE_DIR}/port/patch_ops.cpp
+			# Modules made on the device, and what keeps their mistakes in.
+			${CMAKE_CURRENT_SOURCE_DIR}/port/module_guard.cpp
+			${CMAKE_CURRENT_SOURCE_DIR}/port/made_modules.cpp
 			# rack_engine is a shared lib: the JNI bridge used by its
 			# osdialog backend, clipboard and native menus must live inside it.
 			${CMAKE_CURRENT_SOURCE_DIR}/port/jni_bridge.cpp

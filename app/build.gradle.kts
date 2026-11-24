@@ -299,6 +299,8 @@ android {
 		// The chat's bridge, which the app hands to Termux (TermuxBridge.kt).
 		getByName("sideload") {
 			assets.srcDir("../nova/bridge")
+			// What it makes modules with (module-kit.gradle.kts).
+			assets.srcDir(layout.buildDirectory.dir("generated/kit-assets"))
 		}
 	}
 
@@ -379,6 +381,8 @@ android {
 		jvmTarget = "17"
 	}
 }
+
+apply(from = "module-kit.gradle.kts")
 
 tasks.named("preBuild") {
 	dependsOn(packSystemAssets)

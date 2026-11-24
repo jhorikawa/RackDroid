@@ -8,7 +8,8 @@
 
 Claude Code is run as it was published and as it was signed in by whoever owns
 the device; nothing here sees or handles that. It is given the tools below and
-no others: no files, no shell, no web.
+no others: no files, no shell, no web. Making a module is one of them: it writes
+the source, and nova_build.py compiles it, tries it out and hands it over.
 
 RackDroid starts this itself, in Termux, when its chat is opened (TermuxBridge.kt)
 and hands it the port and the token. To try things from elsewhere, copy the app's
@@ -16,8 +17,10 @@ chat-link.json to ~/.nova-chat-link.json, or name it in NOVA_CHAT_LINK.
 
 Python 3.9 or later, and nothing else.
 """
+import base64
 import hashlib
 import hmac
+import importlib.util
 import json
 import os
 import queue
@@ -29,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import zipfile
 
 CONFIG = os.environ.get("NOVA_CHAT_LINK") or os.path.expanduser("~/.nova-chat-link.json")
 CLAUDE = os.environ.get("NOVA_CLAUDE", "claude")
@@ -37,6 +41,9 @@ MODEL = os.environ.get("NOVA_CHAT_MODEL", "opus")
 EFFORT = os.environ.get("NOVA_CHAT_EFFORT", "low")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 WORK = os.path.expanduser("~/.nova-chat")
+# Where modules are made. Under /data, or Android's linker does not know its way
+# to the libraries of the system; and not where something else is bound over it.
+MAKE = os.environ.get("NOVA_MAKE", "/data/data/com.termux/files/home/nova-modules")
 
 PROMPT = """\
 You are the assistant inside RackDroid, VCV Rack on a small handheld. The user \
@@ -69,6 +76,15 @@ modulation is +-5 V or 0-10 V. Most modulation inputs need their attenuverter \
 knob turned up to do anything.
 - The whole of one answer is one step of the user's Undo. If they want it \
 undone, call undo.
+
+- Making a module is for when the user asks for a module that is not there, or for \
+a change to one made here (the plugin NovaMade). If an installed module does it, \
+say so and use that, unless they want one made. Read module_guide first, once. Then \
+make_module with probes that show it does what it should; if it is refused, put \
+right what it says and call it again. Then add it to the patch, connect it if that \
+was asked for, and measure. A module that is STOPPED has made a mistake: list_made \
+says where, read_made shows it, edit_module puts it right.
+- Undo does not cover making, changing and removing modules; revert_module does.
 
 How to talk
 - Answer in the user's language, in two short sentences, three at the most: the \
@@ -276,30 +292,231 @@ TOOLS = [
     ("undo", "Undo the last answer's changes to the patch.", {}, [], one("undo")),
 ]
 
+ID = {"type": "string", "description": "A capital letter, then letters and digits; also the name of the class."}
+PROBES = {"type": "array", "maxItems": 6, "items": {"type": "object"}, "description": "As module_guide says."}
+
+# The same, for modules made here; the operations are functions of Maker.
+MAKING = [
+    ("module_guide", "How a module is written. Read it before making one.", {}, []),
+    ("list_made", "The modules made here: their versions, whether they run, and where they went wrong.", {}, []),
+    ("read_made", "The source of a module made here.", {"id": ID, "version": {"type": "integer"}}, ["id"]),
+    ("make_module", "Make a new module, or write one made here anew: it is compiled, tested and, if it passes, put in at once; nothing changes if not. The patch calls it NovaMade/id.",
+     {"id": ID, "name": {"type": "string"}, "description": {"type": "string", "description": "One sentence."},
+      "tags": {"type": "array", "items": {"type": "string"}, "description": "Rack's: Oscillator, Filter, Waveshaper, Effect, Delay, Sequencer, Utility, ..."},
+      "code": {"type": "string"}, "probes": PROBES}, ["id", "name", "description", "tags", "code"]),
+    ("edit_module", "Change the source of a module made here, by replacing pieces of it, and put it in as make_module does. Each edit is [old text, new text]; the old text must be there exactly once. Without edits it is only probed.",
+     {"id": ID, "edits": {"type": "array", "items": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2}},
+      "probes": PROBES}, ["id", "edits"]),
+    ("revert_module", "Go back to an earlier version of a module made here.", {"id": ID, "version": {"type": "integer"}}, ["id", "version"]),
+    ("switch_module", "Start a module made here that is stopped, or stop it.", {"id": ID, "on": {"type": "boolean"}}, ["id", "on"]),
+    ("remove_made", "Remove a module made here, for good. Only when the user asks, and not while it is in the patch.", {"id": ID}, ["id"]),
+]
+
+
+class Maker:
+    """The tools of MAKING."""
+
+    def __init__(self, ask, log, cancelled=lambda: False):
+        self.ask = ask
+        self.log = log
+        self.cancelled = cancelled
+        self.builder = None
+        self.lib = None
+
+    def _asked(self, op, **args):
+        r = self.ask(op, **args)
+        if not r.get("ok"):
+            raise ValueError(r.get("error") or "RackDroid does not answer.")
+        return r.get("text") or ""
+
+    def _ready(self):
+        """nova_build.py, out of RackDroid's APK like this file."""
+        if self.builder:
+            return
+        kit = json.loads(self._asked("made_kit"))
+        os.makedirs(MAKE, exist_ok=True)
+        path = os.path.join(MAKE, "nova_build.py")
+        beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nova_build.py")
+        if os.environ.get("NOVA_BUILD_HERE"):
+            path = beside
+        else:
+            with zipfile.ZipFile(kit["apk"]) as z:
+                data = z.read("assets/nova_build.py")
+            with open(path, "wb") as f:
+                f.write(data)
+        spec = importlib.util.spec_from_file_location("nova_build", path)
+        self.lib = importlib.util.module_from_spec(spec)
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(self.lib)
+        self.apk = kit["apk"]
+        self.builder = self.lib.Builder(kit["apk"], MAKE, self.log)
+
+    def module_guide(self, a):
+        self._ready()
+        with zipfile.ZipFile(self.apk) as z:
+            import io
+            with zipfile.ZipFile(io.BytesIO(z.read("assets/module-kit.zip"))) as kit:
+                return kit.read("guide.md").decode()
+
+    def _lines(self, id, version, offset):
+        """The lines of the source at a place in its library, if that is known."""
+        debug = os.path.join(MAKE, "debug", f"{id}-{version}.so")
+        if not offset or not os.path.exists(debug):
+            return ""
+        try:
+            code = json.loads(self._asked("made_source", slug=id, version=version))["code"]
+            self._ready()
+            places = self.builder.where(debug, [offset], code)
+            return " (" + "; ".join(places[:2]) + ")" if places else ""
+        except (ValueError, OSError, KeyError):
+            return ""
+
+    def _faults(self):
+        """Where modules went wrong since RackDroid was started."""
+        out = {}
+        for f in json.loads(self._asked("made_faults")):
+            if f.get("slug"):
+                out.setdefault(f["slug"], []).append(f"version {f['version']}: {f['what']}, {f['where']}"
+                                                     + self._lines(f["slug"], f["version"], f.get("offset")))
+        return out
+
+    def list_made(self, a):
+        made = json.loads(self._asked("made_list"))
+        if not made:
+            return "No module has been made here yet."
+        faults = self._faults()
+        out = []
+        for m in made:
+            s = f"{m['key']} \"{m['name']}\" - {m['description']}\n  version {m['version']} of {', '.join(map(str, m['versions']))}"
+            s += f", {m['in_patch']} in the patch" if m["in_patch"] else ", not in the patch"
+            if m["off"]:
+                s += f"; STOPPED: {m['why']}" + self._lines(m["id"], m["version"], m.get("place"))
+            elif m["stopped"]:
+                s += f"; {m['stopped']}"
+            elif m["stale"]:
+                s += "; STOPPED: made for another version of RackDroid, edit_module without edits makes it again"
+            for f in faults.get(m["id"], [])[-3:]:
+                s += f"\n  went wrong: {f}"
+            out.append(s)
+        return "\n".join(out)
+
+    def read_made(self, a):
+        o = json.loads(self._asked("made_source", slug=a["id"], **({"version": a["version"]} if "version" in a else {})))
+        return f"Version {o['version']}:\n{o['code']}"
+
+    def _install(self, id, name, description, tags, code, probes, quiet=False):
+        self._ready()
+        if not re.fullmatch(r"[A-Z][A-Za-z0-9]{1,23}", id):
+            raise ValueError("The id must be a capital letter and 1 to 23 letters and digits.")
+        try:
+            r = self.builder.build(id, code, probes or None)
+        except self.lib.BuildError as e:
+            raise ValueError(f"Not made; nothing has changed.\n{e}")
+        except self.lib.Unavailable as e:
+            raise ValueError(f"Modules cannot be made here: {e}")
+        if self.cancelled():
+            raise ValueError("Stopped by the user before it was put in.")
+        meta = dict(r["describe"], name=name, description=description, tags=tags, abi=self.builder.abi)
+        meta.pop("problems", None)
+        text = self._asked("made_install", slug=id, meta=meta, code=code, library=base64.b64encode(r["so"]).decode())
+        # With the lines in it, for when it goes wrong in RackDroid.
+        m = re.search(r"is version (\d+)", text)
+        if m:
+            d = os.path.join(MAKE, "debug")
+            os.makedirs(d, exist_ok=True)
+            os.replace(r["debug"], os.path.join(d, f"{id}-{m.group(1)}.so"))
+            old = [f for f in os.listdir(d) if f.startswith(id + "-")]
+            old.sort(key=lambda f: int(re.sub(r"\D", "", f.rsplit("-", 1)[1]) or 0))
+            for f in old[:-6]:
+                os.remove(os.path.join(d, f))
+        return f"{text}\n{r['report']}"
+
+    def make_module(self, a):
+        return self._install(a["id"], a["name"], a["description"], a["tags"], a["code"], a.get("probes"))
+
+    def edit_module(self, a):
+        o = json.loads(self._asked("made_source", slug=a["id"]))
+        code = o["code"]
+        for old, new in a["edits"]:
+            n = code.count(old)
+            if n != 1:
+                raise ValueError(f"Nothing has changed: this is {'not there' if n == 0 else 'there %d times' % n}: {old[:200]}")
+            code = code.replace(old, new)
+        m = o["meta"]
+        stale = m.get("abi") != json.loads(self._asked("made_kit"))["abi"]
+        if not a["edits"] and not stale:
+            self._ready()
+            try:
+                return "Not changed. " + self.builder.build(o["id"], code, a.get("probes"))["report"]
+            except (self.lib.BuildError, self.lib.Unavailable) as e:
+                raise ValueError(str(e))
+        return self._install(o["id"], m["name"], m["description"], m.get("tags") or [], code, a.get("probes"))
+
+    def revert_module(self, a):
+        return self._asked("made_revert", slug=a["id"], version=a["version"])
+
+    def switch_module(self, a):
+        return self._asked("made_switch", slug=a["id"], on=a["on"])
+
+    def remove_made(self, a):
+        return self._asked("made_remove", slug=a["id"])
+
+    def refresh(self):
+        """Those made for another version of RackDroid, made again."""
+        for m in json.loads(self._asked("made_list")):
+            if not m["stale"] or m["off"]:
+                continue
+            try:
+                o = json.loads(self._asked("made_source", slug=m["id"]))
+                x = o["meta"]
+                self._install(m["id"], x["name"], x["description"], x.get("tags") or [], o["code"], None)
+                self.log(f"{m['id']} made again for this RackDroid")
+            except (ValueError, OSError, KeyError) as e:
+                self.log(f"{m['id']} cannot be made again: {e}")
+
 
 def mcp():
     link = None
     tools = {t[0]: t for t in TOOLS}
+    making = {t[0]: t for t in MAKING} if os.environ.get("NOVA_MAKING", "1") == "1" else {}
+    given_up = set()
+    current = None
+    out_lock = threading.Lock()
 
     def answer(o):
-        print(json.dumps(o, ensure_ascii=False), flush=True)
+        with out_lock:
+            print(json.dumps(o, ensure_ascii=False), flush=True)
+
+    def ask(op, **args):
+        nonlocal link
+        if link is None or link.closed.is_set():
+            link = Link("tools")
+        return link.ask(op, **args)
+
+    maker = Maker(ask, log, lambda: current in given_up)
 
     def call(params):
-        nonlocal link
-        t = tools.get(params.get("name"))
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        if name in making:
+            try:
+                return getattr(maker, name)(args), True
+            except (ValueError, KeyError, TypeError, IndexError) as e:
+                return (str(e) if isinstance(e, ValueError) else f"Those arguments cannot be read ({e!r})."), False
+            except OSError as e:
+                return f"That cannot be done here ({e}).", False
+        t = tools.get(name)
         if not t:
             return "No such tool.", False
         try:
-            ops = t[4](params.get("arguments") or {})
+            ops = t[4](args)
         except (KeyError, ValueError, TypeError, IndexError) as e:
             return f"Those arguments cannot be read ({e!r}).", False
         texts = []
         good = True
         for o in ops:
             try:
-                if link is None or link.closed.is_set():
-                    link = Link("tools")
-                r = link.ask(o.pop("op"), **o)
+                r = ask(o.pop("op"), **o)
             except (OSError, ValueError, KeyError) as e:
                 return f"RackDroid cannot be reached ({e}). Is its chat link on?", False
             good = good and bool(r.get("ok"))
@@ -307,12 +524,29 @@ def mcp():
         return "\n".join(x.rstrip("\n") for x in texts) or "Nothing to do.", good
 
     # One at a time, in the order asked: what comes later may build on what
-    # came before.
+    # came before. On a thread of its own, so that a call can be given up.
+    calls = queue.Queue()
+
+    def work():
+        nonlocal current
+        while True:
+            m = calls.get()
+            current = m["id"]
+            if current in given_up:
+                continue
+            text, good = call(m["params"])
+            if m["id"] not in given_up:
+                answer({"jsonrpc": "2.0", "id": m["id"],
+                        "result": {"content": [{"type": "text", "text": text}], "isError": not good}})
+    threading.Thread(target=work, daemon=True).start()
+
     for line in sys.stdin:
         try:
             m = json.loads(line)
         except ValueError:
             continue
+        if m.get("method") == "notifications/cancelled":
+            given_up.add((m.get("params") or {}).get("requestId"))
         if "id" not in m or "method" not in m:
             continue
         reply = {"jsonrpc": "2.0", "id": m["id"]}
@@ -320,12 +554,12 @@ def mcp():
             reply["result"] = {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
                                "serverInfo": {"name": "nova", "version": "1"}}
         elif m["method"] == "tools/list":
-            reply["result"] = {"tools": [{"name": n, "description": d, "inputSchema": {
-                "type": "object", "properties": p, "required": r, "additionalProperties": False}}
-                for n, d, p, r, _ in TOOLS]}
+            reply["result"] = {"tools": [{"name": t[0], "description": t[1], "inputSchema": {
+                "type": "object", "properties": t[2], "required": t[3], "additionalProperties": False}}
+                for t in list(tools.values()) + list(making.values())]}
         elif m["method"] == "tools/call":
-            text, good = call(m["params"])
-            reply["result"] = {"content": [{"type": "text", "text": text}], "isError": not good}
+            calls.put(m)
+            continue
         elif m["method"] == "ping":
             reply["result"] = {}
         else:
@@ -355,7 +589,12 @@ class Claude:
             json.dump({"mcpServers": {"nova": {
                 "command": sys.executable, "args": ["-I", os.path.abspath(__file__), "mcp"],
                 "env": {k: v for k, v in {"NOVA_CHAT_LINK": CONFIG,
-                                          "NOVA_CHAT_HOST": os.environ.get("NOVA_CHAT_HOST")}.items() if v}}}}, f)
+                                          "NOVA_CHAT_HOST": os.environ.get("NOVA_CHAT_HOST"),
+                                          "NOVA_MAKE": os.environ.get("NOVA_MAKE"),
+                                          "NOVA_BUILD_HERE": os.environ.get("NOVA_BUILD_HERE"),
+                                          "NOVA_MAKING": "0" if link.settings.get("making") is False else "1",
+                                          "PATH": os.environ.get("PATH"), "HOME": os.environ.get("HOME"),
+                                          **{k: v for k, v in os.environ.items() if k.startswith("ANDROID_")}}.items() if v}}}}, f)
         prompt = PROMPT
         if catalog:
             prompt += "\nThe installed modules, as Plugin/Module \"name\" [tags]:\n" + catalog + "\n"
@@ -432,14 +671,25 @@ class Claude:
             elif kind == "stream_event":
                 e = o.get("event", {})
                 d = e.get("delta", {})
+                block = e.get("content_block", {})
                 if e.get("type") == "content_block_delta" and d.get("type") == "text_delta":
                     self._event(event="text", text=d.get("text", ""))
+                elif e.get("type") == "content_block_start" and block.get("type") == "tool_use":
+                    # Writing the source of a module takes a while.
+                    self._event(event="doing", name=block.get("name", "").replace("mcp__nova__", ""))
             elif kind == "assistant":
                 for block in o.get("message", {}).get("content", []):
                     if block.get("type") == "tool_use":
                         self.calls += 1
                         name = block.get("name", "").replace("mcp__nova__", "")
-                        self._event(event="tool", name=name, args=block.get("input", {}))
+                        args = block.get("input", {})
+                        if name in ("make_module", "edit_module"):
+                            args = {k: v for k, v in args.items() if k in ("id", "name")}
+                        self._event(event="tool", name=name, args=args, id=block.get("id"))
+            elif kind == "user":
+                for block in (o.get("message", {}).get("content") or []):
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        self._event(event="tool_done", id=block.get("tool_use_id"), ok=not block.get("is_error"))
             elif kind == "result":
                 self.busy = False
                 self.talked = True
@@ -510,6 +760,7 @@ def run():
             link.send({"event": "error", "text": f"Claude Code cannot be started ({e})."})
             return
         link.send({"event": "bridge", "connected": True})
+        threading.Thread(target=refresh, args=(link,), daemon=True).start()
         changed = False
         while not link.closed.is_set():
             try:
@@ -548,6 +799,13 @@ def run():
         log("RackDroid went away")
 
 
+def refresh(link):
+    try:
+        Maker(link.ask, log).refresh()
+    except (OSError, ValueError, KeyError) as e:
+        log("made modules:", e)
+
+
 def say(text):
     over = threading.Event()
 
@@ -567,7 +825,7 @@ def say(text):
     link = Link("user", show)
     link.send({"new": True} if text == "/new" else {"stop": True} if text == "/stop" else {"chat": text})
     if not text.startswith("/"):
-        over.wait(180)
+        over.wait(600)
     time.sleep(0.2)
 
 

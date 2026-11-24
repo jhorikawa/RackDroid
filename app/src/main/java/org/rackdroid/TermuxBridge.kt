@@ -40,6 +40,7 @@ class TermuxBridge(private val activity: Activity, private val server: PatchServ
 			"1. allow-external-apps = true in ~/.termux/termux.properties, then restart Termux\n" +
 			"2. Debian with Claude Code in it (proot-distro)\n" +
 			"3. Sign in: claude auth login\n" +
+			"4. For making modules: pkg install clang llvm\n" +
 			"What went wrong is in ~/nova-chat/bridge.log."
 	}
 

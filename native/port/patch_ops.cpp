@@ -21,6 +21,9 @@
  *   save     {name?, overwrite?}
  *   open     {name, unsaved?: keep | discard}   without a name, an empty one
  *
+ * Those that begin with "made_" are about modules made on this device:
+ * made_modules.cpp.
+ *
  * Modules are called by small numbers here, given out as they are first
  * mentioned: Rack's own ids are sixteen digits, which is a lot to repeat.
  * Jacks and knobs go by name or by number.
@@ -69,6 +72,7 @@
 
 #include "gamepad_nav.hpp"
 #include "label_overlay.hpp"
+#include "made_modules.hpp"
 #include "patch_ops.hpp"
 #include "touch_input.hpp"
 #include "transport.hpp"
@@ -325,8 +329,9 @@ static std::string opPatch() {
 			y = mw->box.pos.y;
 			out += string::f("Row %d:\n", ++row);
 		}
-		out += string::f("  %s (%s)%s\n", nameOf(mw).c_str(), modelKey(mw->model).c_str(),
-			mw->module->isBypassed() ? " bypassed" : "");
+		std::string stopped = madeStatus(mw->module);
+		out += string::f("  %s (%s)%s%s\n", nameOf(mw).c_str(), modelKey(mw->model).c_str(),
+			mw->module->isBypassed() ? " bypassed" : "", stopped.empty() ? "" : (" " + stopped).c_str());
 	}
 	if (out.empty())
 		out = "There are no modules in the patch.\n";
@@ -1248,6 +1253,7 @@ static bool carryOut(const std::shared_ptr<Request>& r, std::string& out) {
 		else if (op == "save") text = opSave(req);
 		else if (op == "open") text = opOpen(req);
 		else if (op == "undo") text = opUndo();
+		else if (op.compare(0, 5, "made_") == 0) text = madeOp(op, req);
 		else if (op == "listen") {
 			listenBegin(r, req);
 			now = false;
