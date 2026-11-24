@@ -53,6 +53,7 @@
 #include <atomic>
 #include <cmath>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -180,6 +181,10 @@ static const float ZOOM_LEVELS[] = {1.f, 2.f, 0.5f};
 render thread. Matches the constants there. */
 enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1, CMD_MOVE_MODULE = 2, CMD_DELETE_MODULE = 3 };
 static std::atomic<int> g_command{CMD_NONE};
+
+/** The focused module's model ("plugin/model"), for the UI thread to ask. */
+static std::mutex g_focusModelMutex;
+static std::string g_focusModel;
 
 /** A module is being carried by the D-pad. */
 static bool g_moving = false;
@@ -1408,6 +1413,14 @@ void gamepadNavStep() {
 	if (g_cabling && !widgetOf(g_cableFrom))
 		g_cabling = false;
 
+	static int64_t toldModule = -1;
+	if (g_focus.moduleId != toldModule) {
+		toldModule = g_focus.moduleId;
+		app::ModuleWidget* mw = rackWidget()->getModule(toldModule);
+		std::lock_guard<std::mutex> lock(g_focusModelMutex);
+		g_focusModel = mw && mw->model && mw->model->plugin ? mw->model->plugin->slug + "/" + mw->model->slug : "";
+	}
+
 	// The module being carried was deleted, or another patch loaded.
 	if (g_moving && !movingModule())
 		endMove(true);
@@ -1787,5 +1800,11 @@ void installGamepadNav() {
 extern "C" JNIEXPORT void JNICALL
 Java_org_rackdroid_MainActivity_nativeGamepadCommand(JNIEnv*, jobject, jint command) {
 	rackdroid::g_command.store((int) command);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_org_rackdroid_MainActivity_nativeGamepadFocusedModel(JNIEnv* env, jobject) {
+	std::lock_guard<std::mutex> lock(rackdroid::g_focusModelMutex);
+	return env->NewStringUTF(rackdroid::g_focusModel.c_str());
 }
 #endif

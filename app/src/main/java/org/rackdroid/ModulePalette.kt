@@ -48,8 +48,8 @@ class ModulePalette(
 
 	private fun dp(v: Int) = (v * activity.resources.displayMetrics.density).toInt()
 
-	private data class Entry(val key: String, val name: String, val brand: String,
-		val tags: List<String>, val description: String, val plugin: String)
+	private data class Entry(override val key: String, override val name: String, override val brand: String,
+		override val tags: List<String>, override val description: String, override val plugin: String) : ModuleText
 
 	/** The tag-based categories, in chip order. Labels are the universal
 	 * modular shorthand, deliberately not localized. */
@@ -65,6 +65,7 @@ class ModulePalette(
 		"FX" to { e -> e.tags.any { it in setOf("Effect", "Delay", "Reverb", "Chorus", "Distortion", "Flanger", "Phaser") } },
 		"NOISE" to { e -> "Noise" in e.tags },
 		"QNT" to { e -> "Quantizer" in e.tags },
+		"VISUAL" to { e -> "Visual" in e.tags && "Blank" !in e.tags },
 		"MIDI" to { e -> "MIDI" in e.tags },
 		"UTIL" to { e -> "Utility" in e.tags },
 	)
@@ -492,16 +493,12 @@ class ModulePalette(
 			reload()
 			return
 		}
-		val q = query.trim().lowercase()
-		val items = entries.asSequence()
-			.filter { brandFilter == null || it.brand == brandFilter }
-			.filter {
-				q.isEmpty() || it.name.lowercase().contains(q) ||
-					it.brand.lowercase().contains(q) ||
-					it.tags.any { t -> t.lowercase().contains(q) }
-			}
-			.sortedWith(compareBy({ it.brand != "VCV" }, { it.name }))
-			.toList()
+		ModuleTags.refresh(activity.getExternalFilesDir(null))
+		val ofBrand = entries.filter { brandFilter == null || it.brand == brandFilter }
+		// With something typed, what answers it best comes first; without, the
+		// stock modules and then A-Z.
+		val items = if (query.isBlank()) ofBrand.sortedWith(compareBy({ it.brand != "VCV" }, { it.name }))
+			else ModuleTags.search(ofBrand, query)
 		searchAdapter.submit(items)
 		// Crossfade grid <-> "no matches" instead of snapping between them.
 		crossfade(searchGrid, items.isNotEmpty())
@@ -566,7 +563,10 @@ class ModulePalette(
 			}
 			setPadding(dp(14), dp(10), dp(14), dp(10))
 			isSingleLine = true
-			imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+			// Not full screen in landscape: it would cover what it finds.
+			imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or
+				android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+				android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
 			setText(query)
 			setSelection(query.length)
 			addTextChangedListener(object : android.text.TextWatcher {

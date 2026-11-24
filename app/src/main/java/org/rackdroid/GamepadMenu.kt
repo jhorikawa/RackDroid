@@ -8,18 +8,10 @@ import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
-import android.text.SpannableString
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
-import android.view.ViewGroup
-import android.widget.BaseAdapter
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -66,6 +58,8 @@ class GamepadMenu(
 	/** The moving arrows on the cables (signal_flow.cpp). */
 	private val signalFlow: () -> Boolean,
 	private val setSignalFlow: (Boolean) -> Unit,
+	/** The key of the focused module's model, or "" (gamepad_nav.cpp). */
+	private val focusedModel: () -> String,
 ) {
 	companion object {
 		const val MAIN = 0
@@ -104,6 +98,12 @@ class GamepadMenu(
 		private const val LINE_QNT = "M2,20 H6 V15 H11 V10 H16 V5 H22"
 		private const val LINE_MIDI = "M12,3 A9,9 0 1 0 12.01,3 M7,13 h0.01 M17,13 h0.01 M8.6,8.6 h0.01 M15.4,8.6 h0.01 M12,7 h0.01"
 		private const val LINE_XY = "M4,4 H20 V20 H4 Z M4,14 H20 M10,4 V20 M10,14 h0.01"
+		private const val LINE_VISUAL = "M2,4 H22 V18 H2 Z M4,12 C6,5 8,5 10,11 C12,17 14,17 16,11 C17.2,7.5 18.5,7.5 20,10 M8,22 H16"
+		private const val LINE_SEARCH = "M4,10 A6,6 0 1 0 16,10 A6,6 0 1 0 4,10 M14.5,14.5 L21,21"
+		private const val LINE_TAG = "M3,3 H11 L21,13 L13,21 L3,11 Z M7.5,7.5 h0.01"
+		private const val LINE_PLUS = "M12,4 V20 M4,12 H20"
+		private const val LINE_BOX = "M4,4 H20 V20 H4 Z"
+		private const val LINE_CHECKED = "M4,4 H20 V20 H4 Z M7.5,12 L11,15.5 L17,8.5"
 		private const val LINE_FLOW = "M3,6 L9,12 L3,18 M9,6 L15,12 L9,18 M15,6 L21,12 L15,18"
 		private const val LINE_MISC = "M5,12 h0.01 M12,12 h0.01 M19,12 h0.01"
 		private const val LINE_MUTABLE = "M4,19 V5 L12,14 L20,5 V19"
@@ -111,14 +111,9 @@ class GamepadMenu(
 
 	/** @param origin the Mutable Instruments module this one is a port of
 	 * ("Plaits"), or null (MutableOrigin). */
-	private data class Entry(val key: String, val name: String, val brand: String, val tags: List<String>,
-		val origin: String?)
-
-	/** One row of a menu. A module row has no icon of its own: its panel is
-	 * looked up when the row comes on screen. A row may carry a second,
-	 * smaller line under its label. */
-	private class Row(val label: String, val icon: Drawable? = null, val thumbKey: String? = null,
-		val note: String? = null)
+	private data class Entry(override val key: String, override val name: String, override val brand: String,
+		override val plugin: String, override val tags: List<String>, override val description: String,
+		val origin: String?) : ModuleText
 
 	/** Same categories, in the same order, as the palette's chips
 	 * (ModulePalette.tagCategories): the two pickers should agree on what a
@@ -135,6 +130,7 @@ class GamepadMenu(
 		Triple("FX", LINE_FX) { e -> e.tags.any { it in setOf("Effect", "Delay", "Reverb", "Chorus", "Distortion", "Flanger", "Phaser") } },
 		Triple("NOISE", LINE_NOISE) { e -> "Noise" in e.tags },
 		Triple("QNT", LINE_QNT) { e -> "Quantizer" in e.tags },
+		Triple("VISUAL", LINE_VISUAL) { e -> "Visual" in e.tags && "Blank" !in e.tags },
 		Triple("MIDI", LINE_MIDI) { e -> "MIDI" in e.tags },
 		Triple("UTIL", "") { e -> "Utility" in e.tags },
 	)
@@ -202,23 +198,24 @@ class GamepadMenu(
 	}
 
 	private fun showMain() {
-		val items = listOf<Pair<Row, () -> Unit>>(
-			if (paused()) Row("Play", res(R.drawable.ic_tb_play)) to { togglePause() }
-			else Row("Pause", res(R.drawable.ic_tb_pause)) to { togglePause() },
-			Row("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
-			Row("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
-			Row("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
-			Row("Delete module", res(R.drawable.ic_tb_delete)) to { command(CMD_DELETE_MODULE) },
-			Row("XY pad", line(LINE_XY)) to { toggleXyPad() },
-			Row(if (signalFlow()) "Signal flow: on" else "Signal flow: off", line(LINE_FLOW)) to { setSignalFlow(!signalFlow()) },
-			Row("Undo", res(R.drawable.ic_tb_undo)) to { history(0) },
-			Row("Redo", res(R.drawable.ic_tb_redo)) to { history(1) },
-			Row("File…", fill(FILL_FILE)) to { openRackMenu(0) },
-			Row("Edit…", fill(FILL_EDIT)) to { openRackMenu(1) },
-			Row("View…", fill(FILL_VIEW)) to { openRackMenu(2) },
-			Row("Engine…", fill(FILL_ENGINE)) to { openRackMenu(3) },
-			Row("Help…", fill(FILL_HELP)) to { openRackMenu(5) },
-			Row("Tools…", fill(FILL_TOOLS)) to { showTools() },
+		val items = listOf<Pair<PadRow, () -> Unit>>(
+			if (paused()) PadRow("Play", res(R.drawable.ic_tb_play)) to { togglePause() }
+			else PadRow("Pause", res(R.drawable.ic_tb_pause)) to { togglePause() },
+			PadRow("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
+			PadRow("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
+			PadRow("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
+			PadRow("Tags of this module…", line(LINE_TAG)) to { showFocusedTags() },
+			PadRow("Delete module", res(R.drawable.ic_tb_delete)) to { command(CMD_DELETE_MODULE) },
+			PadRow("XY pad", line(LINE_XY)) to { toggleXyPad() },
+			PadRow(if (signalFlow()) "Signal flow: on" else "Signal flow: off", line(LINE_FLOW)) to { setSignalFlow(!signalFlow()) },
+			PadRow("Undo", res(R.drawable.ic_tb_undo)) to { history(0) },
+			PadRow("Redo", res(R.drawable.ic_tb_redo)) to { history(1) },
+			PadRow("File…", fill(FILL_FILE)) to { openRackMenu(0) },
+			PadRow("Edit…", fill(FILL_EDIT)) to { openRackMenu(1) },
+			PadRow("View…", fill(FILL_VIEW)) to { openRackMenu(2) },
+			PadRow("Engine…", fill(FILL_ENGINE)) to { openRackMenu(3) },
+			PadRow("Help…", fill(FILL_HELP)) to { openRackMenu(5) },
+			PadRow("Tools…", fill(FILL_TOOLS)) to { showTools() },
 		)
 		list("Menu", items.map { it.first }) { items[it].second() }
 	}
@@ -237,12 +234,13 @@ class GamepadMenu(
 			val icon = image?.drawable?.constantState?.newDrawable(activity.resources)?.mutate()
 			val tint = image?.imageTintList?.defaultColor
 			icon?.setTint(if (tint == null || Color.luminance(tint) > 0.55f) inkColor else tint)
-			Row(label, icon)
+			PadRow(label, icon)
 		}
 		list("Tools", rows) { views[it].performClick() }
 	}
 
 	private fun loadEntries(): List<Entry> {
+		ModuleTags.refresh(activity.getExternalFilesDir(null))
 		val out = ArrayList<Entry>()
 		runCatching {
 			val arr = JSONArray(getModelsJson())
@@ -254,167 +252,196 @@ class GamepadMenu(
 					for (t in 0 until tagsJ.length())
 						tags.add(tagsJ.getString(t))
 				val key = o.getString("key")
-				out.add(Entry(key, o.optString("name"), o.optString("brand"), tags,
-					MutableOrigin.of(key, o.optString("description"))))
+				val description = o.optString("description")
+				out.add(Entry(key, o.optString("name"), o.optString("brand"), o.optString("plugin"), tags,
+					description, MutableOrigin.of(key, description)))
 			}
 		}
 		return out
 	}
 
-	private fun showCategories() {
+	/** What the module pickers show, or null with a word to the user if the
+	 * list has not been built yet (the palette has never been opened). */
+	private fun entriesOrSay(): List<Entry>? {
 		val entries = loadEntries()
-		if (entries.isEmpty()) {
-			// Not built yet (the palette has never been opened): ask for it and
-			// say so, rather than show an empty list.
-			runCatching { requestBuild() }
-			Toast.makeText(activity, "The module list is still loading. Try again.", Toast.LENGTH_SHORT).show()
-			return
+		if (entries.isNotEmpty())
+			return entries
+		runCatching { requestBuild() }
+		Toast.makeText(activity, "The module list is still loading. Try again.", Toast.LENGTH_SHORT).show()
+		return null
+	}
+
+	private fun showCategories(start: Int = 0) {
+		val entries = entriesOrSay() ?: return
+		val rows = ArrayList<Pair<PadRow, (Int) -> Unit>>()
+		rows.add(PadRow("Search…", line(LINE_SEARCH)) to { _ -> showSearch(entries) })
+		rows.add(PadRow("Tags…", line(LINE_TAG)) to { _ -> showTagList(entries) })
+		fun category(label: String, icon: Drawable?, found: List<Entry>) {
+			if (found.isNotEmpty())
+				rows.add(PadRow("$label   (${found.size})", icon) to { at ->
+					showModules(label, found, byOrigin = label == MUTABLE) { showCategories(at) }
+				})
 		}
-		val cats = ArrayList<Triple<String, Drawable?, List<Entry>>>()
 		// The Mutable Instruments ports, whoever made them and whatever they
 		// are called: first, because their names are the ones that give no
 		// hint of what they are.
-		val mutable = entries.filter { it.origin != null }
-		if (mutable.isNotEmpty())
-			cats.add(Triple(MUTABLE, line(LINE_MUTABLE), mutable))
-		for ((label, icon, pred) in tagCategories) {
-			val found = entries.filter(pred)
-			if (found.isNotEmpty())
-				cats.add(Triple(label, if (icon.isEmpty()) fill(FILL_TOOLS) else line(icon), found))
-		}
-		val misc = entries.filter { e -> tagCategories.none { (_, _, pred) -> pred(e) } }
-		if (misc.isNotEmpty())
-			cats.add(Triple("MISC", line(LINE_MISC), misc))
-		cats.add(Triple("ALL", res(R.drawable.ic_tb_modules), entries))
-		list("Add module", cats.map { Row("${it.first}   (${it.third.size})", it.second) }) {
-			showModules(cats[it].first, cats[it].third)
-		}
+		category(MUTABLE, line(LINE_MUTABLE), entries.filter { it.origin != null })
+		for ((label, icon, pred) in tagCategories)
+			category(label, if (icon.isEmpty()) fill(FILL_TOOLS) else line(icon), entries.filter(pred))
+		category("MISC", line(LINE_MISC), entries.filter { e -> tagCategories.none { (_, _, pred) -> pred(e) } })
+		category("ALL", res(R.drawable.ic_tb_modules), entries)
+		list("Add module", rows.map { it.first }, start) { rows[it].second(it) }
 	}
 
-	private fun showModules(category: String, entries: List<Entry>) {
+	/** A module's own line under its name: what it is a port of, and the tags
+	 * the user gave it. */
+	private fun noteOf(e: Entry, byOrigin: Boolean = false): String? {
+		val parts = ArrayList<String>()
+		if (byOrigin) parts.add(e.brand)
+		else e.origin?.let { parts.add("Mutable Instruments $it") }
+		val own = ModuleTags.of(e.key)
+		if (own.isNotEmpty())
+			parts.add(own.joinToString("  ") { "#$it" })
+		return if (parts.isEmpty()) null else parts.joinToString("   ")
+	}
+
+	private fun showModules(category: String, entries: List<Entry>, byOrigin: Boolean = false, start: Int = 0,
+			onBack: () -> Unit) {
 		// Among the Mutable ports the hardware's name leads, and orders the
 		// list: that is the name being looked for. Everywhere else it is a
 		// note under the module's own name.
-		val byOrigin = category == MUTABLE
 		val sorted = if (byOrigin)
 			entries.sortedWith(compareBy({ it.origin?.lowercase() }, { it.brand.lowercase() }, { it.name.lowercase() }))
 		else
 			entries.sortedWith(compareBy({ it.name.lowercase() }, { it.brand.lowercase() }))
 		val rows = sorted.map {
-			if (byOrigin)
-				Row("${it.origin}   ·   ${it.name}", thumbKey = it.key, note = it.brand)
-			else
-				Row("${it.name}   ·   ${it.brand}", thumbKey = it.key,
-					note = it.origin?.let { o -> "Mutable Instruments $o" })
+			PadRow(if (byOrigin) "${it.origin}   ·   ${it.name}" else "${it.name}   ·   ${it.brand}",
+				thumbKey = it.key, note = noteOf(it, byOrigin))
 		}
-		list("Add module: $category", rows) {
-			// Where the palette puts a tapped module: the middle of the rack
-			// that is on screen. The focus moves to it (gamepad_nav.cpp).
-			val v = activity.window.decorView
-			runCatching { chooseAt(sorted[it].key, v.width * 0.5f, v.height * 0.55f) }
+		list("Add module: $category", rows, start, hint = "A  add      Y  tags      B  back",
+			onY = { at -> showTags(sorted[at]) { showModules(category, entries, byOrigin, at, onBack) } },
+			onBack = onBack) { add(sorted[it]) }
+	}
+
+	private fun add(e: Entry) {
+		// Where the palette puts a tapped module: the middle of the rack
+		// that is on screen. The focus moves to it (gamepad_nav.cpp).
+		val v = activity.window.decorView
+		runCatching { chooseAt(e.key, v.width * 0.5f, v.height * 0.55f) }
+	}
+
+	/** Looking for a module by name, maker or tag. */
+	private fun showSearch(entries: List<Entry>, initial: String = "", startRow: Int = -1) {
+		var found: List<Entry> = emptyList()
+		val d = PadTextDialog(activity, inkColor, "Search", "name, maker or tag:  scope, 波形 …", "results",
+			"D-pad  keys      A  type      Y  erase      X  keys / results      on a result:  A  add   Y  tags      B  back",
+			initial, startRow)
+		d.rowsFor = { query ->
+			found = ModuleTags.search(entries, query)
+			found.map { e ->
+				val tags = e.tags.joinToString(", ")
+				PadRow("${e.name}   ·   ${e.brand}", thumbKey = e.key,
+					note = listOfNotNull(noteOf(e), tags.ifEmpty { null }).joinToString("   ").ifEmpty { null })
+			}
+		}
+		d.onPick = { add(found[it]) }
+		d.onY = { at ->
+			val query = d.text
+			showTags(found[at]) { showSearch(entries, query, at) }
+		}
+		d.onBack = { showCategories() }
+		open = d.show()
+	}
+
+	/** Every tag there is, the user's own first. */
+	private fun showTagList(entries: List<Entry>, start: Int = 0) {
+		val rows = ArrayList<Pair<PadRow, (Int) -> Unit>>()
+		for ((tag, _) in ModuleTags.inUse()) {
+			val found = entries.filter { tag in ModuleTags.of(it.key) }
+			if (found.isNotEmpty())
+				rows.add(PadRow("#$tag   (${found.size})", line(LINE_TAG)) to { at ->
+					showModules("#$tag", found) { showTagList(loadEntries(), at) }
+				})
+		}
+		for (tag in ModuleTags.builtIns) {
+			val found = entries.filter { tag.name in it.tags }
+			if (found.isNotEmpty())
+				rows.add(PadRow("${tag.name}   (${found.size})", note = tag.ja.takeIf { it != tag.name }) to { at ->
+					showModules(tag.name, found) { showTagList(loadEntries(), at) }
+				})
+		}
+		list("Tags", rows.map { it.first }, start, hint = "Your own tags first.  Y on a module gives it one.",
+			onBack = { showCategories(1) }) { rows[it].second(it) }
+	}
+
+	private fun showFocusedTags() {
+		val key = focusedModel()
+		val entry = (entriesOrSay() ?: return).firstOrNull { it.key == key }
+		if (entry == null)
+			Toast.makeText(activity, "Move the focus to a module first", Toast.LENGTH_SHORT).show()
+		else
+			showTags(entry) {}
+	}
+
+	/** The user's tags, to put on a module or take off it. */
+	private fun showTags(e: Entry, start: Int = 0, onBack: () -> Unit) {
+		val mine = ModuleTags.of(e.key)
+		val used = ModuleTags.inUse().map { it.first }
+		val rows = listOf(PadRow("New tag…", line(LINE_PLUS))) +
+			used.map { PadRow("#$it", line(if (it in mine) LINE_CHECKED else LINE_BOX)) }
+		val builtIn = if (e.tags.isEmpty()) "" else "Rack's own:  ${e.tags.joinToString(", ")}"
+		list("Tags of ${e.name}", rows, start, hint = builtIn.ifEmpty { "A  put on / take off      B  back" },
+			onBack = onBack) { i ->
+			if (i == 0) {
+				val d = PadTextDialog(activity, inkColor, "New tag", "a word of your own", "OK",
+					"D-pad  keys      A  type      Y  erase      START  OK      B  back")
+				d.onDone = { text ->
+					val tag = ModuleTags.normalize(text)
+					ModuleTags.set(e.key, tag, true)
+					showTags(e, maxOf(0, ModuleTags.inUse().indexOfFirst { it.first == tag } + 1), onBack)
+				}
+				d.onBack = { showTags(e, 0, onBack) }
+				open = d.show()
+			}
+			else {
+				ModuleTags.set(e.key, used[i - 1], used[i - 1] !in mine)
+				// Taken off the last module that had it, a tag is gone.
+				showTags(e, i, onBack)
+			}
 		}
 	}
 
-	private inner class RowAdapter(private val context: Context, private val rows: List<Row>) : BaseAdapter() {
-		private val modules = rows.any { it.thumbKey != null }
-		/** A module's panel is tall and narrow: the picture column is sized
-		 * for that, so every name starts at the same x whatever the width. */
-		private val iconW = if (modules) dp(64) else dp(28)
-		private val iconH = if (modules) dp(56) else dp(28)
-
-		/** The row the controller is on. Kept here and drawn as the row's
-		 * background, not left to the list's own selection: a list opened
-		 * while the window is in touch mode shows no selection until a key
-		 * arrives, so the first press of the D-pad was spent making one
-		 * appear, and A straight after opening did nothing. */
-		var cursor = 0
-		private val cursorColor = (inkColor and 0x00FFFFFF) or 0x40000000
-		private val noteColor = (inkColor and 0x00FFFFFF) or (0xB0 shl 24)
-
-		fun paint(row: View, position: Int) =
-			row.setBackgroundColor(if (position == cursor) cursorColor else Color.TRANSPARENT)
-
-		override fun getCount() = rows.size
-		override fun getItem(position: Int): Any = rows[position]
-		override fun getItemId(position: Int) = position.toLong()
-
-		override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-			val row = convertView as? LinearLayout ?: LinearLayout(context).apply {
-				orientation = LinearLayout.HORIZONTAL
-				gravity = Gravity.CENTER_VERTICAL
-				minimumHeight = dp(if (modules) 64 else 52)
-				setPadding(dp(24), dp(4), dp(24), dp(4))
-				addView(ImageView(context).apply {
-					scaleType = ImageView.ScaleType.FIT_CENTER
-					layoutParams = LinearLayout.LayoutParams(iconW, iconH)
-				})
-				addView(TextView(context).apply {
-					setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-					setTextColor(inkColor)
-					layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-						.apply { marginStart = dp(20) }
-				})
-			}
-			paint(row, position)
-			val r = rows[position]
-			val image = row.getChildAt(0) as ImageView
-			val text = row.getChildAt(1) as TextView
-			text.text = if (r.note == null) r.label else SpannableString("${r.label}\n${r.note}").apply {
-				val from = r.label.length + 1
-				setSpan(RelativeSizeSpan(0.78f), from, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-				setSpan(ForegroundColorSpan(noteColor), from, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-			}
-			if (r.thumbKey != null) {
-				// Decoded on demand and cached, as the palette's tiles are. A
-				// module with no art leaves its place empty.
-				val bmp = runCatching { ThumbnailCache.get(activity.filesDir, r.thumbKey, iconW) }.getOrNull()
-				image.setImageDrawable(bmp?.let { BitmapDrawable(activity.resources, it) })
-			}
-			else {
-				image.setImageDrawable(r.icon)
-			}
-			return row
-		}
+	private fun titleView(context: Context, title: String, hint: String?): View = LinearLayout(context).apply {
+		orientation = LinearLayout.VERTICAL
+		setPadding(dp(24), dp(18), dp(24), dp(10))
+		addView(TextView(context).apply {
+			text = title
+			setTextColor(inkColor)
+			setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+			setTypeface(typeface, android.graphics.Typeface.BOLD)
+		})
+		if (hint != null) addView(TextView(context).apply {
+			text = hint
+			setTextColor((inkColor and 0x00FFFFFF) or (0xB0 shl 24))
+			setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+		})
 	}
 
 	/** @param start the row the cursor begins on.
-	 * @param onY what Y does to the row under the cursor, if anything. */
-	private fun list(title: String, rows: List<Row>, start: Int = 0, onY: ((Int) -> Unit)? = null,
-			onPick: (Int) -> Unit) {
+	 * @param hint a smaller line under the title.
+	 * @param onY what Y does to the row under the cursor, if anything.
+	 * @param onBack where B goes, if not out of the menus. */
+	private fun list(title: String, rows: List<PadRow>, start: Int = 0, hint: String? = null,
+			onY: ((Int) -> Unit)? = null, onBack: (() -> Unit)? = null, onPick: (Int) -> Unit) {
 		val builder = AlertDialog.Builder(activity)
-		val adapter = RowAdapter(builder.context, rows)
+		val adapter = PadListAdapter(activity, builder.context, rows, inkColor)
 		val dialog = builder
-			.setTitle(title)
+			.setCustomTitle(titleView(builder.context, title, hint))
 			.setAdapter(adapter) { _, i -> onPick(i) }
 			.create()
 		adapter.cursor = start.coerceIn(0, maxOf(0, rows.size - 1))
-		// The highlight is moved by repainting the two rows it concerns, never
-		// by notifyDataSetChanged(): that lays the list out again around its
-		// OWN selection -- row 0, from the moment the D-pad takes the window
-		// out of touch mode -- so every press threw the list back to the top
-		// and scrolled it down again from there. The list's selection is kept
-		// on the cursor for the same reason.
 		fun moveCursor(to: Int) {
-			val lv = dialog.listView ?: return
-			if (rows.isEmpty())
-				return
-			val from = adapter.cursor
-			adapter.cursor = to.coerceIn(0, rows.size - 1)
-			if (adapter.cursor == from)
-				return
-			lv.getChildAt(from - lv.firstVisiblePosition)?.let { adapter.paint(it, from) }
-			val row = lv.getChildAt(adapter.cursor - lv.firstVisiblePosition)
-			row?.let { adapter.paint(it, adapter.cursor) }
-			val room = lv.height - lv.paddingTop - lv.paddingBottom
-			// Where the row goes: where it is if that is on screen, or else
-			// just inside the edge it has gone past.
-			val height = (row ?: lv.getChildAt(0))?.height ?: 0
-			val top = when {
-				row != null -> (row.top - lv.paddingTop).coerceIn(0, maxOf(0, room - height))
-				adapter.cursor > from -> maxOf(0, room - height)
-				else -> 0
-			}
-			lv.setSelectionFromTop(adapter.cursor, top)
+			dialog.listView?.let { adapter.move(it, to) }
 		}
 		// A release only counts if this dialog saw the press. The button that
 		// opened the menu is still down when the menu appears, and its release
@@ -456,7 +483,14 @@ class GamepadMenu(
 					}
 					true
 				}
-				KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_X -> {
+				KeyEvent.KEYCODE_BUTTON_B -> {
+					if (!down) {
+						dialog.dismiss()
+						onBack?.invoke()
+					}
+					true
+				}
+				KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_X -> {
 					if (!down)
 						dialog.dismiss()
 					true

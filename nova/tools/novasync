@@ -6,6 +6,9 @@
 #   novasync pull [NAME] [DIR]    Nova -> Mac; no NAME pulls every patch
 #                                 (DIR defaults to ./patches-from-nova)
 #   novasync recordings [DIR]     pull the WAV recordings (Documents/RackDroid)
+#   novasync tags [FILE]          Nova -> Mac: the module tags (default
+#                                 ./module-tags.json)
+#   novasync tags push FILE       Mac -> Nova (read the next time a list opens)
 #
 # The app keeps its patches in its own folder on shared storage (see
 # native/port/patch_share.cpp), which adb can read and write directly.
@@ -59,8 +62,21 @@ case "$cmd" in
 		mkdir -p "$dest"
 		"$ADB" pull "/sdcard/Documents/RackDroid/." "$dest/" 2>&1 | tail -1
 		;;
+	tags)
+		remote="/sdcard/Android/data/$APP/files/module-tags.json"
+		if [ "${1:-}" = push ]; then
+			[ -f "${2:-}" ] || { echo "usage: novasync tags push FILE" >&2; exit 2; }
+			"$ADB" push "$2" "$remote" >/dev/null 2>&1
+			"$ADB" shell "chmod 660 '$remote'"
+			echo "pushed: $2"
+		else
+			dest="${1:-module-tags.json}"
+			"$ADB" pull "$remote" "$dest" >/dev/null 2>&1 || { echo "(no tags yet)"; exit 0; }
+			echo "pulled: $dest"
+		fi
+		;;
 	*)
-		sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
 		exit 2
 		;;
 esac
