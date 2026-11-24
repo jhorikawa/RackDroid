@@ -28,6 +28,16 @@ void gamepadNavCancelHeld();
 the controller's module menu is on the new module. */
 void gamepadNavFocusModule(int64_t moduleId);
 
+/** What the cables should be told apart for (signal_flow.cpp): the module
+selected, or the module and jack focused. False when there is neither. */
+struct CableFocus {
+	int64_t moduleId = -1;
+	/** -1 the whole module, else engine::Port::Type (INPUT 0, OUTPUT 1). */
+	int portType = -1;
+	int portId = -1;
+};
+bool gamepadNavCableFocus(CableFocus& out);
+
 /** Play mode: the right stick is two voltages for the patch (gamepad_midi.cpp)
 instead of turning the focused knob. R3 toggles it. */
 bool gamepadPlayMode();

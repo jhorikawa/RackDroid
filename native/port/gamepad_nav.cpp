@@ -1183,6 +1183,17 @@ bool gamepadPlayMode() {
 }
 
 
+bool gamepadNavCableFocus(CableFocus& out) {
+	if (!g_active || (g_focus.kind != FOCUS_MODULE && !g_focus.isPort()))
+		return false;
+	out.moduleId = g_focus.moduleId;
+	out.portType = g_focus.kind == FOCUS_INPUT ? engine::Port::INPUT
+		: g_focus.kind == FOCUS_OUTPUT ? engine::Port::OUTPUT : -1;
+	out.portId = g_focus.id;
+	return true;
+}
+
+
 void gamepadNavFocusModule(int64_t moduleId) {
 	app::RackWidget* rack = rackWidget();
 	app::ModuleWidget* mw = rack ? rack->getModule(moduleId) : NULL;

@@ -1936,7 +1936,12 @@ class MainActivity : NativeActivity() {
 			tools = { gamepadTools },
 			toggleXyPad = { xyPad.toggle() },
 			paused = { nativeTransportPaused() },
-			togglePause = { nativeTransportToggle() })
+			togglePause = { nativeTransportToggle() },
+			signalFlow = { novaPrefs.getBoolean("signalFlow", true) },
+			setSignalFlow = {
+				novaPrefs.edit().putBoolean("signalFlow", it).apply()
+				nativeSetSignalFlow(it)
+			})
 	}
 
 	/** The handheld's tilt and a touch pad, as voltages for the patch
@@ -1959,6 +1964,8 @@ class MainActivity : NativeActivity() {
 			}
 		}
 	}
+
+	private val novaPrefs by lazy { getSharedPreferences("nova", Context.MODE_PRIVATE) }
 
 	/** Pause and play, beside the toolbar's arrow (transport.cpp). */
 	private var pauseButton: ImageButton? = null
@@ -3102,6 +3109,7 @@ class MainActivity : NativeActivity() {
 	private external fun nativeBackPressed()
 	private external fun nativeToolbarTap(index: Int)
 	private external fun nativeGamepadCommand(command: Int)
+	private external fun nativeSetSignalFlow(on: Boolean)
 	private external fun nativeTransportToggle()
 	private external fun nativeTransportPaused(): Boolean
 	private external fun nativeGamepadTilt(x: Float, y: Float)
@@ -3178,6 +3186,7 @@ class MainActivity : NativeActivity() {
 				installPackUris(waiting)
 			}
 			markStartupReady()
+			runCatching { nativeSetSignalFlow(novaPrefs.getBoolean("signalFlow", true)) }
 			runCatching { nativeBrowserRequestBuild() }
 			runCatching { modulePalette.show() }
 			showStartupRecoveryDialog()

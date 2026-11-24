@@ -61,6 +61,7 @@
 #include "gamepad_midi.hpp"
 #include "gamepad_nav.hpp"
 #include "transport.hpp"
+#include "signal_flow.hpp"
 #include "patch_share.hpp"
 #include "tour_demo.hpp"
 #include "engine_barrier.hpp"
@@ -401,6 +402,7 @@ struct RackDroidApp {
 					(system::getTime() - tPatch) * 1000.0);
 				APP->engine->startFallbackThread();
 				rackdroid::installLabelOverlay();
+				rackdroid::installSignalFlow();
 				rackdroid::windowInstallDrawMarkers();
 				rackdroid::installCableParkBar();
 				rackdroid::installSelectionGlow();

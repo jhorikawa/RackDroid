@@ -63,6 +63,9 @@ class GamepadMenu(
 	private val toggleXyPad: () -> Unit,
 	private val paused: () -> Boolean,
 	private val togglePause: () -> Unit,
+	/** The moving arrows on the cables (signal_flow.cpp). */
+	private val signalFlow: () -> Boolean,
+	private val setSignalFlow: (Boolean) -> Unit,
 ) {
 	companion object {
 		const val MAIN = 0
@@ -101,6 +104,7 @@ class GamepadMenu(
 		private const val LINE_QNT = "M2,20 H6 V15 H11 V10 H16 V5 H22"
 		private const val LINE_MIDI = "M12,3 A9,9 0 1 0 12.01,3 M7,13 h0.01 M17,13 h0.01 M8.6,8.6 h0.01 M15.4,8.6 h0.01 M12,7 h0.01"
 		private const val LINE_XY = "M4,4 H20 V20 H4 Z M4,14 H20 M10,4 V20 M10,14 h0.01"
+		private const val LINE_FLOW = "M3,6 L9,12 L3,18 M9,6 L15,12 L9,18 M15,6 L21,12 L15,18"
 		private const val LINE_MISC = "M5,12 h0.01 M12,12 h0.01 M19,12 h0.01"
 		private const val LINE_MUTABLE = "M4,19 V5 L12,14 L20,5 V19"
 	}
@@ -206,6 +210,7 @@ class GamepadMenu(
 			Row("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
 			Row("Delete module", res(R.drawable.ic_tb_delete)) to { command(CMD_DELETE_MODULE) },
 			Row("XY pad", line(LINE_XY)) to { toggleXyPad() },
+			Row(if (signalFlow()) "Signal flow: on" else "Signal flow: off", line(LINE_FLOW)) to { setSignalFlow(!signalFlow()) },
 			Row("Undo", res(R.drawable.ic_tb_undo)) to { history(0) },
 			Row("Redo", res(R.drawable.ic_tb_redo)) to { history(1) },
 			Row("File…", fill(FILL_FILE)) to { openRackMenu(0) },
