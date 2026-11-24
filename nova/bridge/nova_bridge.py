@@ -61,6 +61,9 @@ and right, and keep levels sane - outputs swing about 10 V, and a mixer or a \
 VCA before the Audio module should leave it at about half. Then call listen \
 once, and if what should move is steady at 0 V, find out why and fix it.
 - Knobs sit at useful defaults. Set the ones the request is about.
+- What is on no knob - a module's mode, its model, polyphony, presets - is in its \
+menu: read_menu, then set_menu.
+- Undo does not cover saving, opening and pausing. Do those only when asked.
 - Pitch is 1 V per octave with 0 V = C4; gates and triggers are 0 or 10 V; \
 modulation is +-5 V or 0-10 V. Most modulation inputs need their attenuverter \
 knob turned up to do anything.
@@ -158,7 +161,7 @@ class Link:
         self.waiting[n] = box
         try:
             self.send(dict(args, op=op, id=n))
-            return box.get(timeout=20)
+            return box.get(timeout=125)
         except (OSError, queue.Empty):
             return {"ok": False, "error": "RackDroid does not answer."}
         finally:
@@ -209,6 +212,20 @@ def one(op):
     return lambda a: [dict(a, op=op)]
 
 
+def choice_list(a):
+    out = []
+    for c in a["choices"]:
+        o = {"op": "choose", "module": a["module"], "item": str(c[0])}
+        if len(c) > 1:
+            o["text" if isinstance(c[1], str) else "value"] = c[1]
+        out.append(o)
+    return out
+
+
+ACTIONS = ["bypass", "unbypass", "initialize", "randomize", "duplicate", "duplicate_with_cables", "unplug_all"]
+WHERE = ["right_of", "left_of", "below", "above"]
+
+
 CABLE = "Each cable is [module of the output, output, module of the input, input]; a jack by its name, or its number as listed (from 0)."
 
 # Name, what it does, its parameters, those that must be there, and the
@@ -237,6 +254,23 @@ TOOLS = [
     ("set_knobs", "Turn knobs and switches. Each is [module, knob, where to]; the knob by its name or number, where to as a number in the range shown as [value ...], or as a text, what one would type at the knob: \"440\", \"C4\", \"50\" (in the unit it shows), or the name of a choice.",
      {"knobs": array("[2, \"Cutoff frequency\", \"800\"], ...", MODULE, JACK, {"type": ["number", "string"]}, minimum=3)},
      ["knobs"], knob_list),
+    ("read_menu", "The own menu of a module - modes, models, options that are on no knob - and its presets. Each row has an id; what stands behind a name is its present state, a check mark or a value.",
+     {"module": MODULE}, ["module"], one("menu")),
+    ("set_menu", "Choose rows of a module's menu by the ids read_menu gave, in order. Each choice is [id], or [id, number] for a slider, or [id, text] for a text. Ids of presets start with p and load the preset.",
+     {"module": MODULE, "choices": array("[\"2.1\"], ...", {"type": "string"}, {"type": ["number", "string"]}, minimum=1)},
+     ["module", "choices"], choice_list),
+    ("module_action", "Do something to modules as a whole. unplug_all takes out all their cables.",
+     {"modules": {"type": "array", "items": MODULE}, "action": {"type": "string", "enum": ACTIONS}}, ["modules", "action"],
+     lambda a: [{"op": "act", "module": m, "what": a["action"]} for m in a["modules"]]),
+    ("move_modules", "Move modules, in order. Each move is [module, where, other module]; right_of and left_of make room, below and above are the neighbouring rows.",
+     {"moves": array("[3, \"right_of\", 5], ...", MODULE, {"type": "string", "enum": WHERE}, MODULE)}, ["moves"],
+     lambda a: [{"op": "move", "module": m[0], "where": m[1], "other": m[2]} for m in a["moves"]]),
+    ("list_patches", "The saved patches, which one is open, and whether it has unsaved changes.", {}, [], one("patches")),
+    ("save_patch", "Save the patch, under another name if one is given. Only when the user asks.",
+     {"name": {"type": "string"}, "overwrite": {"type": "boolean", "description": "Only if the user said so."}}, [], one("save")),
+    ("open_patch", "Open a saved patch, or a new one if no name is given, in place of the one that is open. Only when the user asks. If that has unsaved changes it is refused until the user has been asked: unsaved is keep (a copy is saved first) or discard.",
+     {"name": {"type": "string"}, "unsaved": {"type": "string", "enum": ["keep", "discard"]}}, [], one("open")),
+    ("play", "Let the engine run or pause it.", {"on": {"type": "boolean"}}, ["on"], one("play")),
     ("listen", "Watch the outputs for a second and say how far each swings, including what reaches the speaker. Give a module to watch all of its outputs.",
      {"module": MODULE}, [], one("listen")),
     ("undo", "Undo the last answer's changes to the patch.", {}, [], one("undo")),

@@ -69,6 +69,10 @@ class ChatPanel(
 		var cables = 0
 		var unplugged = 0
 		var knobs = 0
+		var choices = 0
+		var actions = 0
+		var moved = 0
+		val files = ArrayList<String>()
 		var listened = false
 		var undid = false
 		var view: TextView? = null
@@ -80,6 +84,10 @@ class ChatPanel(
 			if (cables > 0) parts.add("$cables cable${if (cables > 1) "s" else ""}")
 			if (unplugged > 0) parts.add("$unplugged unplugged")
 			if (knobs > 0) parts.add("$knobs knob${if (knobs > 1) "s" else ""}")
+			if (choices > 0) parts.add("$choices setting${if (choices > 1) "s" else ""}")
+			if (moved > 0) parts.add("$moved moved")
+			if (actions > 0) parts.add("$actions action${if (actions > 1) "s" else ""}")
+			parts.addAll(files)
 			if (undid) parts.add("undo")
 			if (listened) parts.add("measured")
 			return parts.joinToString("  ·  ")
@@ -214,6 +222,12 @@ class ChatPanel(
 			"connect" -> m.cables += size("cables")
 			"disconnect" -> m.unplugged += size("cables")
 			"set_knobs" -> m.knobs += size("knobs")
+			"set_menu" -> m.choices += size("choices")
+			"module_action" -> m.actions += size("modules")
+			"move_modules" -> m.moved += size("moves")
+			"save_patch" -> m.files.add("save")
+			"open_patch" -> m.files.add("open")
+			"play" -> m.files.add(if (args.optBoolean("on")) "play" else "pause")
 			"listen" -> m.listened = true
 			"undo" -> m.undid = true
 		}

@@ -9,8 +9,17 @@
  *   connect  {from, output, to, input, stack?}
  *   disconnect {from, output, to, input}
  *   set      {module, param, value | text}
+ *   menu     {module}                           the module's own menu, and its presets
+ *   choose   {module, item, value? | text?}     a row of it
+ *   act      {module, what}                     bypass, unbypass, initialize, randomize,
+ *                                               duplicate, duplicate_with_cables, unplug_all
+ *   move     {module, where, other}             right_of, left_of, below or above another
  *   listen   {module?}                          what the outputs do for a moment
  *   undo                                        the last turn, if nothing came after it
+ *   play     {on}                               not a step of Undo, nor are these:
+ *   patches                                     the saved patches, and which is open
+ *   save     {name?, overwrite?}
+ *   open     {name, unsaved?: keep | discard}   without a name, an empty one
  *
  * Modules are called by small numbers here, given out as they are first
  * mentioned: Rack's own ids are sixteen digits, which is a lot to repeat.
@@ -25,10 +34,12 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <ctime>
 #include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -42,10 +53,17 @@
 #include <engine/ParamQuantity.hpp>
 #include <engine/PortInfo.hpp>
 #include <history.hpp>
+#include <asset.hpp>
+#include <patch.hpp>
 #include <plugin.hpp>
 #include <settings.hpp>
 #include <string.hpp>
 #include <system.hpp>
+#include <ui/Menu.hpp>
+#include <ui/MenuItem.hpp>
+#include <ui/MenuLabel.hpp>
+#include <ui/Slider.hpp>
+#include <ui/TextField.hpp>
 
 #include <jansson.h>
 
@@ -573,6 +591,476 @@ static std::string opSet(json_t* req) {
 }
 
 
+/** What Rack's own actions push on the history while this is about, taken off
+it again and put into this turn's action. */
+struct Absorb {
+	history::Action* last = NULL;
+
+	Absorb() {
+		history::State* h = APP->history;
+		if (h->actionIndex > 0)
+			last = h->actions[h->actionIndex - 1];
+	}
+
+	/** Returns how many there were. */
+	int finish() {
+		history::State* h = APP->history;
+		// By what came before, not by a number: the history drops its oldest.
+		int base = h->actionIndex;
+		while (base > 0 && h->actions[base - 1] != last)
+			base--;
+		std::vector<history::Action*> got(h->actions.begin() + base, h->actions.begin() + h->actionIndex);
+		if (got.empty())
+			return 0;
+		h->actions.resize(base);
+		h->actionIndex = base;
+		history::ComplexAction* g = group();
+		for (history::Action* a : got)
+			g->push(a);
+		return (int) got.size();
+	}
+};
+
+
+/* ---- A module's menu ---- */
+
+/** One row that can be chosen. The menus it hangs from are this one's to
+delete. */
+struct MenuRow {
+	std::vector<std::unique_ptr<ui::Menu>> menus;
+	widget::Widget* widget = NULL;
+};
+
+static const int MAX_MENU_ROWS = 260;
+
+
+static bool choosable(widget::Widget* w) {
+	return dynamic_cast<ui::MenuItem*>(w) || dynamic_cast<ui::Slider*>(w) || dynamic_cast<ui::TextField*>(w);
+}
+
+
+static void menuText(ui::Menu* menu, const std::string& prefix, int depth, int& rows, std::string& out) {
+	const std::string indent(2 + depth * 2, ' ');
+	int n = 0;
+	for (widget::Widget* c : menu->children) {
+		if (rows > MAX_MENU_ROWS)
+			return;
+		if (ui::MenuLabel* label = dynamic_cast<ui::MenuLabel*>(c)) {
+			if (!label->text.empty())
+				out += indent + "(" + label->text + ")\n";
+			continue;
+		}
+		if (!choosable(c))
+			continue;
+		std::string id = prefix + string::f("%d", ++n);
+		if (++rows > MAX_MENU_ROWS) {
+			out += indent + "... and more\n";
+			return;
+		}
+		if (ui::Slider* slider = dynamic_cast<ui::Slider*>(c)) {
+			Quantity* q = slider->quantity;
+			if (q)
+				out += indent + id + " slider \"" + q->getLabel() + "\": " + q->getDisplayValueString() + q->getUnit()
+					+ " [value " + number(q->getValue()) + " in " + number(q->getMinValue()) + ".." + number(q->getMaxValue()) + "]\n";
+			continue;
+		}
+		if (ui::TextField* field = dynamic_cast<ui::TextField*>(c)) {
+			out += indent + id + " text \"" + field->text + "\"\n";
+			continue;
+		}
+		ui::MenuItem* item = dynamic_cast<ui::MenuItem*>(c);
+		// Where many of them work out their check mark.
+		item->step();
+		out += indent + id + " \"" + item->text + "\"";
+		std::unique_ptr<ui::Menu> child(item->disabled ? NULL : item->createChildMenu());
+		std::string right = string::trim(item->rightText);
+		if (child) {
+			// The arrow of a submenu says nothing; what may stand before it does.
+			size_t arrow = right.find(RIGHT_ARROW);
+			if (arrow != std::string::npos)
+				right = string::trim(right.substr(0, arrow));
+		}
+		if (!right.empty())
+			out += " " + right;
+		if (item->disabled)
+			out += " (cannot be chosen now)";
+		out += "\n";
+		if (child) {
+			if (depth < 4)
+				menuText(child.get(), id + ".", depth + 1, rows, out);
+			else
+				out += indent + "  ...\n";
+		}
+	}
+}
+
+
+struct Preset {
+	std::string path;
+	std::string name;
+};
+
+
+static void findPresets(const std::string& dir, const std::string& prefix, std::vector<Preset>& out) {
+	if (!system::isDirectory(dir))
+		return;
+	std::vector<std::string> entries = system::getEntries(dir);
+	std::sort(entries.begin(), entries.end());
+	for (const std::string& path : entries) {
+		if (out.size() >= 120)
+			return;
+		std::string name = system::getStem(path);
+		if (system::isDirectory(path)) {
+			findPresets(path, prefix + name + " / ", out);
+			continue;
+		}
+		if (system::getExtension(path) != ".vcvm" || name == "template")
+			continue;
+		// "001_Name" is how they are kept in order.
+		size_t digits = name.find_first_not_of("0123456789");
+		if (digits != std::string::npos && digits > 0 && name[digits] == '_')
+			name = name.substr(digits + 1);
+		out.push_back(Preset{path, prefix + name});
+	}
+}
+
+
+static std::vector<Preset> presetsOf(app::ModuleWidget* mw) {
+	std::vector<Preset> out;
+	findPresets(mw->model->getUserPresetDirectory(), "", out);
+	findPresets(mw->model->getFactoryPresetDirectory(), "", out);
+	return out;
+}
+
+
+static std::unique_ptr<ui::Menu> menuOf(app::ModuleWidget* mw) {
+	std::unique_ptr<ui::Menu> menu(new ui::Menu);
+	mw->appendContextMenu(menu.get());
+	return menu;
+}
+
+
+static std::string opMenu(json_t* req) {
+	app::ModuleWidget* mw = moduleArg(req, "module");
+	std::string out;
+	int rows = 0;
+	menuText(menuOf(mw).get(), "", 0, rows, out);
+	out = rows > 0 ? "Menu of " + nameOf(mw) + ":\n" + out : nameOf(mw) + " has no menu of its own.\n";
+	std::vector<Preset> presets = presetsOf(mw);
+	for (size_t i = 0; i < presets.size(); i++)
+		out += string::f("%s  p%d \"%s\"\n", i == 0 ? "Presets:\n" : "", (int) i + 1, presets[i].name.c_str());
+	return out;
+}
+
+
+/** The row an id like "2.1.3" means. */
+static MenuRow findRow(app::ModuleWidget* mw, const std::string& id) {
+	MenuRow row;
+	row.menus.push_back(menuOf(mw));
+	ui::Menu* menu = row.menus.back().get();
+	std::vector<std::string> parts = string::split(id, ".");
+	for (size_t i = 0; i < parts.size(); i++) {
+		int want = std::atoi(parts[i].c_str());
+		row.widget = NULL;
+		for (widget::Widget* c : menu->children) {
+			if (choosable(c) && --want == 0) {
+				row.widget = c;
+				break;
+			}
+		}
+		if (!row.widget)
+			throw OpError{"There is no row " + id + " in the menu of " + nameOf(mw) + ". Read the menu."};
+		ui::MenuItem* item = dynamic_cast<ui::MenuItem*>(row.widget);
+		ui::Menu* child = item && !item->disabled ? item->createChildMenu() : NULL;
+		if (child)
+			row.menus.emplace_back(child);
+		if (i + 1 == parts.size()) {
+			if (child)
+				throw OpError{"Row " + id + " opens a submenu: choose a row in it."};
+		}
+		else if (!child) {
+			throw OpError{"Row " + id + ": there is no submenu there. Read the menu."};
+		}
+		menu = child;
+	}
+	return row;
+}
+
+
+static std::string opChoose(json_t* req) {
+	checkLock(2);
+	app::ModuleWidget* mw = moduleArg(req, "module");
+	int64_t id = mw->module->id;
+	std::string name = nameOf(mw);
+	json_t* itemJ = json_object_get(req, "item");
+	std::string itemId = json_is_integer(itemJ) ? string::f("%d", (int) json_integer_value(itemJ))
+		: json_is_string(itemJ) ? json_string_value(itemJ) : "";
+	json_t* value = json_object_get(req, "value");
+	json_t* text = json_object_get(req, "text");
+
+	Absorb absorb;
+	if (!itemId.empty() && (itemId[0] == 'p' || itemId[0] == 'P')) {
+		std::vector<Preset> presets = presetsOf(mw);
+		int n = std::atoi(itemId.c_str() + 1);
+		if (n < 1 || n > (int) presets.size())
+			throw OpError{name + " has no preset " + itemId + "."};
+		mw->loadAction(presets[n - 1].path);
+		absorb.finish();
+		return name + ": loaded the preset \"" + presets[n - 1].name + "\".\n" + describe(mw->module, mw);
+	}
+
+	MenuRow row = findRow(mw, itemId);
+	std::string label;
+	json_t* before = mw->toJson();
+	if (ui::Slider* slider = dynamic_cast<ui::Slider*>(row.widget)) {
+		if (!slider->quantity || !json_is_number(value)) {
+			json_decref(before);
+			throw OpError{"Row " + itemId + " is a slider: give a value."};
+		}
+		slider->quantity->setValue((float) json_number_value(value));
+		label = slider->quantity->getLabel() + ": " + slider->quantity->getDisplayValueString() + slider->quantity->getUnit();
+	}
+	else if (ui::TextField* field = dynamic_cast<ui::TextField*>(row.widget)) {
+		if (!json_is_string(text)) {
+			json_decref(before);
+			throw OpError{"Row " + itemId + " is a text: give one."};
+		}
+		field->setText(json_string_value(text));
+		widget::EventContext context;
+		widget::Widget::ActionEvent e;
+		e.context = &context;
+		field->onAction(e);
+		label = field->text;
+	}
+	else {
+		ui::MenuItem* item = dynamic_cast<ui::MenuItem*>(row.widget);
+		if (item->disabled) {
+			json_decref(before);
+			throw OpError{"Row " + itemId + " \"" + item->text + "\" cannot be chosen now."};
+		}
+		label = item->text;
+		item->doAction(true);
+	}
+	int own = absorb.finish();
+	// It may have taken the module away, or put another in its place.
+	mw = theRack()->getModule(id);
+	if (own == 0 && mw) {
+		json_t* after = mw->toJson();
+		if (json_equal(before, after)) {
+			json_decref(before);
+			json_decref(after);
+		}
+		else {
+			history::ModuleChange* h = new history::ModuleChange;
+			h->moduleId = id;
+			h->oldModuleJ = before;
+			h->newModuleJ = after;
+			group()->push(h);
+		}
+	}
+	else {
+		json_decref(before);
+	}
+	if (mw)
+		gamepadNavShow(id);
+	return name + ": chose \"" + label + "\".";
+}
+
+
+static std::string opAct(json_t* req) {
+	app::ModuleWidget* mw = moduleArg(req, "module");
+	const char* whatJ = json_string_value(json_object_get(req, "what"));
+	std::string what = whatJ ? whatJ : "";
+	std::string name = nameOf(mw);
+	bool layout = what == "duplicate" || what == "duplicate_with_cables" || what == "unplug_all";
+	checkLock(layout ? 1 : 2);
+	Absorb absorb;
+	if (what == "bypass" || what == "unbypass") {
+		if (mw->module->isBypassed() == (what == "bypass"))
+			return name + " was already so.";
+		mw->bypassAction(what == "bypass");
+	}
+	else if (what == "initialize") mw->resetAction();
+	else if (what == "randomize") mw->randomizeAction();
+	else if (what == "unplug_all") mw->disconnectAction();
+	else if (what == "duplicate" || what == "duplicate_with_cables") {
+		std::set<int64_t> known;
+		for (app::ModuleWidget* o : theRack()->getModules())
+			known.insert(o->module->id);
+		mw->cloneAction(what == "duplicate_with_cables");
+		absorb.finish();
+		for (app::ModuleWidget* o : theRack()->getModules()) {
+			if (known.count(o->module->id))
+				continue;
+			g_lastAdded = o->module->id;
+			noteModuleAdded(o->module->id);
+			gamepadNavShow(o->module->id);
+			return "Duplicated " + name + " as " + nameOf(o) + ".";
+		}
+		return "Rack would not duplicate it.";
+	}
+	else throw OpError{"There is no action \"" + what + "\"."};
+	absorb.finish();
+	gamepadNavShow(mw->module->id);
+	return name + ": " + what + ".";
+}
+
+
+static std::string opMove(json_t* req) {
+	checkLock(1);
+	app::ModuleWidget* mw = moduleArg(req, "module");
+	app::ModuleWidget* other = moduleArg(req, "other");
+	const char* whereJ = json_string_value(json_object_get(req, "where"));
+	std::string where = whereJ ? whereJ : "";
+	if (mw == other)
+		throw OpError{"A module cannot be moved beside itself."};
+	app::RackWidget* rack = theRack();
+	rack->updateModuleOldPositions();
+	math::Vec at = other->box.pos;
+	if (where == "right_of" || where == "left_of") {
+		// In between: whatever stands there makes room.
+		math::Vec pos(where == "right_of" ? other->box.getRight() : at.x, at.y);
+		if (settings::squeezeModules)
+			rack->setModulePosSqueeze(mw, pos);
+		else
+			rack->setModulePosForce(mw, pos);
+	}
+	else if (where == "below" || where == "above") {
+		rack->setModulePosNearest(mw, math::Vec(at.x, at.y + (where == "below" ? 1 : -1) * app::RACK_GRID_HEIGHT));
+	}
+	else throw OpError{"where is right_of, left_of, below or above."};
+	rack->updateExpanders();
+	group()->push(rack->getModuleDragAction());
+	gamepadNavShow(mw->module->id);
+	return "Moved " + nameOf(mw) + " " + where + " " + nameOf(other) + ".";
+}
+
+
+/* ---- The patch as a file ---- */
+
+/** What was open before the chat opened something else. */
+static const char LAST_CLOSED[] = "Last closed by chat";
+
+
+static std::string patchesDir() {
+	return asset::user("patches");
+}
+
+
+static std::string patchPath(const std::string& given) {
+	std::string name = string::trim(given);
+	if (string::endsWith(string::lowercase(name), ".vcv"))
+		name = name.substr(0, name.size() - 4);
+	if (name.empty() || name[0] == '.' || name.find('/') != std::string::npos || name.size() > 100)
+		throw OpError{"\"" + given + "\" is no name for a patch."};
+	return system::join(patchesDir(), name + ".vcv");
+}
+
+
+static std::string openName() {
+	return APP->patch->path.empty() ? "" : system::getStem(APP->patch->path);
+}
+
+
+static std::string opPatches() {
+	std::string out = openName().empty() ? "The open patch has no name yet" : "Open: \"" + openName() + "\"";
+	out += APP->history->isSaved() ? ", with no unsaved changes.\n" : ", with unsaved changes.\n";
+	std::vector<std::string> entries = system::getEntries(patchesDir());
+	std::sort(entries.begin(), entries.end());
+	out += "Saved patches:\n";
+	for (const std::string& path : entries) {
+		if (system::getExtension(path) == ".vcv")
+			out += "  " + system::getStem(path) + "\n";
+	}
+	return out;
+}
+
+
+static std::string opSave(json_t* req) {
+	const char* nameJ = json_string_value(json_object_get(req, "name"));
+	std::string path = APP->patch->path;
+	bool named = nameJ && *nameJ;
+	if (named)
+		path = patchPath(nameJ);
+	else if (path.empty())
+		throw OpError{"The patch has no name yet: give one, or ask the user for one."};
+	if (named && system::getFilename(path) != system::getFilename(APP->patch->path) && system::exists(path)
+			&& !json_is_true(json_object_get(req, "overwrite")))
+		throw OpError{"There is already a patch \"" + system::getStem(path) + "\". Ask the user before overwriting it."};
+	system::createDirectory(patchesDir());
+	// As Manager::saveDialog(): before saving, so the file does not say it is
+	// unsaved.
+	APP->history->setSaved();
+	APP->patch->save(path);
+	if (named) {
+		APP->patch->path = path;
+		settings::lastPatchDirectory = system::getDirectory(path);
+		APP->patch->pushRecentPath(path);
+	}
+	return "Saved as \"" + system::getStem(path) + "\".";
+}
+
+
+static std::string opOpen(json_t* req) {
+	checkLock(1);
+	const char* nameJ = json_string_value(json_object_get(req, "name"));
+	const char* unsavedJ = json_string_value(json_object_get(req, "unsaved"));
+	std::string unsaved = unsavedJ ? unsavedJ : "";
+	std::string path;
+	if (nameJ && *nameJ) {
+		path = patchPath(nameJ);
+		if (!system::isFile(path))
+			throw OpError{"There is no patch \"" + std::string(nameJ) + "\". list_patches has the names."};
+	}
+	std::string kept;
+	if (!APP->history->isSaved() && unsaved != "discard") {
+		if (unsaved != "keep")
+			throw OpError{"The open patch has unsaved changes. Ask the user whether to save it first, to keep a copy of it (unsaved: keep) or to drop the changes (unsaved: discard)."};
+		char stamp[32];
+		std::time_t now = std::time(NULL);
+		std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&now));
+		kept = (openName().empty() ? std::string("Untitled") : openName()) + " kept " + stamp;
+		APP->patch->save(patchPath(kept));
+	}
+	// Whatever was said: what Rack takes for saved may be a copy under another
+	// name, and what was meant by dropping it may not have been this. Aside
+	// first, in case it is the one being opened.
+	std::string last = patchPath(LAST_CLOSED);
+	std::string aside = last + ".new";
+	bool empty = theRack()->getModules().empty();
+	if (!empty)
+		APP->patch->save(aside);
+	if (path.empty()) {
+		APP->patch->loadTemplate();
+	}
+	else {
+		APP->patch->load(path);
+		APP->history->setSaved();
+		// Not the one kept aside: that name is about to mean something else.
+		APP->patch->path = path == last ? "" : path;
+		if (path != last)
+			APP->patch->pushRecentPath(path);
+	}
+	if (!empty) {
+		system::remove(last);
+		system::rename(aside, last);
+	}
+	g_numberOf.clear();
+	g_idOf.clear();
+	g_nextNumber = 1;
+	g_lastAdded = -1;
+	return (path.empty() ? std::string("Opened a new patch.") : "Opened \"" + system::getStem(path) + "\".")
+		+ (empty ? "" : " What was open is kept as \"" + (kept.empty() ? std::string(LAST_CLOSED) : kept) + "\".") + "\n" + opPatch();
+}
+
+
+static std::string opPlay(json_t* req) {
+	bool on = json_is_true(json_object_get(req, "on"));
+	transportSetPaused(!on);
+	return on ? "Playing." : "Paused.";
+}
+
+
 static std::string opUndo() {
 	history::State* h = APP->history;
 	ChatAction* c = h->canUndo() ? dynamic_cast<ChatAction*>(h->actions[h->actionIndex - 1]) : NULL;
@@ -609,6 +1097,7 @@ struct Request {
 	bool done = false;
 	/** Its caller has gone: not to be carried out. */
 	bool dropped = false;
+	bool begun = false;
 };
 
 /** An output watched for a moment. Once a frame is no way to look at a wave,
@@ -750,6 +1239,14 @@ static bool carryOut(const std::shared_ptr<Request>& r, std::string& out) {
 		else if (op == "connect") text = opConnect(req);
 		else if (op == "disconnect") text = opDisconnect(req);
 		else if (op == "set") text = opSet(req);
+		else if (op == "menu") text = opMenu(req);
+		else if (op == "choose") text = opChoose(req);
+		else if (op == "act") text = opAct(req);
+		else if (op == "move") text = opMove(req);
+		else if (op == "play") text = opPlay(req);
+		else if (op == "patches") text = opPatches();
+		else if (op == "save") text = opSave(req);
+		else if (op == "open") text = opOpen(req);
 		else if (op == "undo") text = opUndo();
 		else if (op == "listen") {
 			listenBegin(r, req);
@@ -790,6 +1287,8 @@ void patchOpsStep() {
 				return;
 			r = g_queue.front();
 			g_queue.pop_front();
+			r->begun = true;
+			g_answered.notify_all();
 		}
 		windowNoteInteraction();
 		std::string out;
@@ -804,8 +1303,12 @@ std::string patchOpCall(const std::string& request) {
 	r->in = request;
 	std::unique_lock<std::mutex> lock(g_mutex);
 	g_queue.push_back(r);
-	if (!g_answered.wait_for(lock, std::chrono::seconds(8), [&] { return r->done; })) {
+	// Long once it has been begun: a row of a menu may ask the user for a file.
+	if (!g_answered.wait_for(lock, std::chrono::seconds(8), [&] { return r->done || r->begun; })
+			|| !g_answered.wait_for(lock, std::chrono::seconds(110), [&] { return r->done; })) {
 		r->dropped = true;
+		if (r->begun)
+			return answer(false, "It was begun but is not finished: the user is perhaps being asked something.");
 		return answer(false, "RackDroid is not on the screen, so the patch cannot be read or changed. Nothing was done.");
 	}
 	return r->out;
