@@ -234,13 +234,26 @@ static widget::Widget* widgetOf(const Focus& f) {
 }
 
 
+/** A line said above the strip for a moment. Not a toast: those queue up, and
+deleting five modules was still being announced a quarter of a minute later. */
+static std::string g_notice;
+static double g_noticeAt = -1e9;
+static const double NOTICE_SECONDS = 2.5;
+
+
+static void say(const std::string& text) {
+	g_notice = text;
+	g_noticeAt = system::getTime();
+}
+
+
 /** The toolbar's padlocks hold for the controller as they do for a finger: the
 outline one freezes where modules are and how they are patched, the solid one
 the knobs as well. Says so when it stops something. */
 static bool lockedFor(int level) {
 	if (touchLockMode() < level)
 		return false;
-	showToast(level >= 2 ? "Locked: controls cannot be changed" : "Locked: the layout cannot be changed");
+	say(level >= 2 ? "Locked: controls cannot be changed" : "Locked: the layout cannot be changed");
 	return true;
 }
 
@@ -615,7 +628,7 @@ static void stepIn() {
 	else if (!firstItemOf(mw, to))
 		return;
 	if (to.kind == FOCUS_MODULE) {
-		showToast("This module has no knobs or jacks");
+		say("This module has no knobs or jacks");
 		return;
 	}
 	g_moduleLevel = false;
@@ -795,7 +808,7 @@ static void deleteFocusedModule() {
 		g_moduleLevel = true;
 		setFocus(panelItem(best).focus);
 	}
-	showToast(("Deleted " + name + ".  START > Undo brings it back").c_str());
+	say("Deleted " + name + "   -   START > Undo brings it back");
 }
 
 
@@ -1580,7 +1593,7 @@ struct GamepadOverlay : widget::Widget {
 		nvgStroke(args.vg);
 	}
 
-	void drawStrip(const DrawArgs& args, const std::string& text, NVGcolor accent) {
+	void drawStrip(const DrawArgs& args, const std::string& text, NVGcolor accent, float raise = 0.f) {
 		if (text.empty() || !APP->window->uiFont)
 			return;
 		nvgFontFaceId(args.vg, APP->window->uiFont->handle);
@@ -1592,7 +1605,7 @@ struct GamepadOverlay : widget::Widget {
 		float w = std::fmin(tw + 28.f, box.size.x - 16.f);
 		float h = 26.f;
 		float x = (box.size.x - w) * 0.5f;
-		float y = box.size.y - BOTTOM_INSET + 4.f;
+		float y = box.size.y - BOTTOM_INSET + 4.f - raise;
 		nvgBeginPath(args.vg);
 		nvgRoundedRect(args.vg, x, y, w, h, h * 0.5f);
 		nvgFillColor(args.vg, nvgRGBA(0x1C, 0x18, 0x13, 0xEC));
@@ -1719,6 +1732,8 @@ struct GamepadOverlay : widget::Widget {
 		drawFocus(args);
 		if (movingModule() || (g_active && widgetOf(g_focus)))
 			drawHints(args);
+		if (system::getTime() - g_noticeAt < NOTICE_SECONDS)
+			drawStrip(args, g_notice, nvgRGB(0xF4, 0xEC, 0xDC), 30.f);
 		widget::Widget::draw(args);
 	}
 
