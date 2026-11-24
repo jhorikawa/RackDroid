@@ -320,6 +320,9 @@ class GamepadMenu(
 		private val cursorColor = (inkColor and 0x00FFFFFF) or 0x40000000
 		private val noteColor = (inkColor and 0x00FFFFFF) or (0xB0 shl 24)
 
+		fun paint(row: View, position: Int) =
+			row.setBackgroundColor(if (position == cursor) cursorColor else Color.TRANSPARENT)
+
 		override fun getCount() = rows.size
 		override fun getItem(position: Int): Any = rows[position]
 		override fun getItemId(position: Int) = position.toLong()
@@ -341,7 +344,7 @@ class GamepadMenu(
 						.apply { marginStart = dp(20) }
 				})
 			}
-			row.setBackgroundColor(if (position == cursor) cursorColor else Color.TRANSPARENT)
+			paint(row, position)
 			val r = rows[position]
 			val image = row.getChildAt(0) as ImageView
 			val text = row.getChildAt(1) as TextView
@@ -363,17 +366,44 @@ class GamepadMenu(
 		}
 	}
 
-	private fun list(title: String, rows: List<Row>, onPick: (Int) -> Unit) {
+	/** @param start the row the cursor begins on.
+	 * @param onY what Y does to the row under the cursor, if anything. */
+	private fun list(title: String, rows: List<Row>, start: Int = 0, onY: ((Int) -> Unit)? = null,
+			onPick: (Int) -> Unit) {
 		val builder = AlertDialog.Builder(activity)
 		val adapter = RowAdapter(builder.context, rows)
 		val dialog = builder
 			.setTitle(title)
 			.setAdapter(adapter) { _, i -> onPick(i) }
 			.create()
+		adapter.cursor = start.coerceIn(0, maxOf(0, rows.size - 1))
+		// The highlight is moved by repainting the two rows it concerns, never
+		// by notifyDataSetChanged(): that lays the list out again around its
+		// OWN selection -- row 0, from the moment the D-pad takes the window
+		// out of touch mode -- so every press threw the list back to the top
+		// and scrolled it down again from there. The list's selection is kept
+		// on the cursor for the same reason.
 		fun moveCursor(to: Int) {
+			val lv = dialog.listView ?: return
+			if (rows.isEmpty())
+				return
+			val from = adapter.cursor
 			adapter.cursor = to.coerceIn(0, rows.size - 1)
-			adapter.notifyDataSetChanged()
-			dialog.listView?.smoothScrollToPosition(adapter.cursor)
+			if (adapter.cursor == from)
+				return
+			lv.getChildAt(from - lv.firstVisiblePosition)?.let { adapter.paint(it, from) }
+			val row = lv.getChildAt(adapter.cursor - lv.firstVisiblePosition)
+			row?.let { adapter.paint(it, adapter.cursor) }
+			val room = lv.height - lv.paddingTop - lv.paddingBottom
+			// Where the row goes: where it is if that is on screen, or else
+			// just inside the edge it has gone past.
+			val height = (row ?: lv.getChildAt(0))?.height ?: 0
+			val top = when {
+				row != null -> (row.top - lv.paddingTop).coerceIn(0, maxOf(0, room - height))
+				adapter.cursor > from -> maxOf(0, room - height)
+				else -> 0
+			}
+			lv.setSelectionFromTop(adapter.cursor, top)
 		}
 		// A release only counts if this dialog saw the press. The button that
 		// opened the menu is still down when the menu appears, and its release
@@ -420,6 +450,13 @@ class GamepadMenu(
 						dialog.dismiss()
 					true
 				}
+				KeyEvent.KEYCODE_BUTTON_Y -> {
+					if (!down && onY != null && rows.isNotEmpty()) {
+						dialog.dismiss()
+						onY(adapter.cursor)
+					}
+					true
+				}
 				KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_BUTTON_R1 -> {
 					if (down && lv != null && lv.count > 0) {
 						val page = maxOf(1, lv.lastVisiblePosition - lv.firstVisiblePosition)
@@ -436,5 +473,7 @@ class GamepadMenu(
 		// One highlight, not two: the list's own selection would sit on
 		// whichever row it last landed on while the cursor moved elsewhere.
 		dialog.listView?.selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+		if (adapter.cursor > 0)
+			dialog.listView?.setSelectionFromTop(adapter.cursor, dp(64))
 	}
 }
