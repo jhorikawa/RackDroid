@@ -117,8 +117,13 @@ static app::ModuleWidget* moduleArg(json_t* req, const char* key) {
 }
 
 
-static std::string foldName(const std::string& s) {
-	return string::trim(string::lowercase(s));
+static std::string foldName(std::string s) {
+	std::replace(s.begin(), s.end(), '"', '\'');
+	s = string::trim(string::lowercase(s));
+	// A name given back with the marks it was listed in.
+	while (s.size() >= 2 && s.front() == '\'' && s.back() == '\'' )
+		s = s.substr(1, s.size() - 2);
+	return s;
 }
 
 
@@ -172,7 +177,10 @@ static std::vector<std::string> portNames(engine::Module* m, engine::Port::Type 
 	int n = type == engine::Port::INPUT ? m->getNumInputs() : m->getNumOutputs();
 	for (int i = 0; i < n; i++) {
 		engine::PortInfo* info = type == engine::Port::INPUT ? m->getInputInfo(i) : m->getOutputInfo(i);
-		out.push_back(info ? info->getName() : string::f("#%d", i + 1));
+		std::string name = info ? info->getName() : string::f("#%d", i + 1);
+		// Audio's jacks have quotation marks in their names.
+		std::replace(name.begin(), name.end(), '"', '\'');
+		out.push_back(name);
 	}
 	return out;
 }
@@ -194,7 +202,7 @@ static std::string endOf(app::PortWidget* port) {
 	app::ModuleWidget* mw = port->getAncestorOfType<app::ModuleWidget>();
 	std::vector<std::string> names = portNames(port->module, port->type);
 	std::string name = port->portId < (int) names.size() ? names[port->portId] : "?";
-	return string::f("%s \"%s\"", mw ? nameOf(mw).c_str() : "?", name.c_str());
+	return string::f("%s [%d \"%s\"]", mw ? nameOf(mw).c_str() : "?", port->portId, name.c_str());
 }
 
 
