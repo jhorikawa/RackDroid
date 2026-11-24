@@ -265,7 +265,7 @@ struct SignalFlow : widget::Widget {
 				return;
 			dir = dir.div(n);
 			float full = math::clamp(std::fmin(d - gap, gap + usable - d) / fade, 0.f, 1.f);
-			if (full < 0.1f)
+			if (full < 0.35f)
 				return;
 			float s = size * full;
 			math::Vec side(-dir.y, dir.x);
