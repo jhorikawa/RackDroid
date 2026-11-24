@@ -1942,7 +1942,21 @@ class MainActivity : NativeActivity() {
 				novaPrefs.edit().putBoolean("signalFlow", it).apply()
 				nativeSetSignalFlow(it)
 			},
-			focusedModel = { nativeGamepadFocusedModel() })
+			focusedModel = { nativeGamepadFocusedModel() },
+			chatLink = { patchServer.running },
+			setChatLink = { on ->
+				val ok = if (on) patchServer.start() else { patchServer.stop(); true }
+				novaPrefs.edit().putBoolean("chatLink", on && ok).apply()
+				if (!ok)
+					Toast.makeText(this, "The chat link cannot be opened in this build.", Toast.LENGTH_SHORT).show()
+			})
+	}
+
+	/** The patch, for the chat's bridge (PatchServer.kt). */
+	private val patchServer by lazy {
+		PatchServer(this,
+			modelsJson = { nativeBrowserModelsJson() },
+			requestBuild = { nativeBrowserRequestBuild() })
 	}
 
 	/** The handheld's tilt and a touch pad, as voltages for the patch
@@ -2094,6 +2108,7 @@ class MainActivity : NativeActivity() {
 			(getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.abandonAudioFocusRequest(it)
 		}
 		audioFocusRequest = null
+		runCatching { patchServer.stop() }
 		RackService.stop(this)
 		if (activeActivity?.get() === this)
 			activeActivity = null
@@ -3189,6 +3204,8 @@ class MainActivity : NativeActivity() {
 			}
 			markStartupReady()
 			runCatching { nativeSetSignalFlow(novaPrefs.getBoolean("signalFlow", true)) }
+			if (novaPrefs.getBoolean("chatLink", false))
+				runCatching { patchServer.start() }
 			runCatching { nativeBrowserRequestBuild() }
 			runCatching { modulePalette.show() }
 			showStartupRecoveryDialog()

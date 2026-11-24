@@ -4,7 +4,9 @@
 
 	INTERNET: exclusively to ask api.github.com whether a newer release exists
 	and to download that APK. Nothing else in the app makes a request, and the
-	check does not run at all until the user opts in.
+	check does not run at all until the user opts in. It is also what lets the
+	app listen on the loopback address (PatchServer.kt), which is off until the
+	user switches the chat link on and cannot be reached from another device.
 
 	REQUEST_INSTALL_PACKAGES: to hand the downloaded APK to the system
 	installer, which still shows its own confirmation screen. Android also

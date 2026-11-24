@@ -62,6 +62,7 @@
 #include "gamepad_nav.hpp"
 #include "transport.hpp"
 #include "signal_flow.hpp"
+#include "patch_ops.hpp"
 #include "patch_share.hpp"
 #include "tour_demo.hpp"
 #include "engine_barrier.hpp"
@@ -3695,6 +3696,8 @@ void android_main(android_app* app) {
 					rackdroid::touchStep();
 					rackdroid::gamepadNavStep();
 					rackdroid::gamepadMidiStep();
+					if (rd.patchLaunched)
+						rackdroid::patchOpsStep();
 					rackdroid::processTourDemo();
 					checkZoomCeiling();
 					checkMaxedOutOverload();
