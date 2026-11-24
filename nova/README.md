@@ -4,6 +4,8 @@
 
 本家はタッチ専用です。4.5 インチの画面では、画面を動かすつもりの指がモジュールやつまみを動かしてしまいます。この fork は、十字キーでつまみやジャックを選び、ボタンで編集・配線・モジュールの追加と移動ができるようにしました。スティック・本体の傾き・タッチパッドを、パッチの中の電圧（CV）として使うこともできます。
 
+「ゆっくりしたエコーを足して」のように、**チャットでパッチを組む**こともできます。答えるのは、Nova の中で動く Claude Code です。
+
 VCV の Audible Instruments にない Mutable Instruments 系のモジュール 5 つ（Beads、Peaks、Edges、Blades、24 モデル版の Plaits）も足してあります。同じモジュールを Mac の VCV Rack 2 にも入れられるので、それを使ったパッチも両方で開けます。
 
 タッチ操作など本家の機能はそのまま残してあります。パッチは VCV Rack 2 と同じ `.vcv` です。Nova に入るアプリの名前は「RackDroid Nova」です。
@@ -96,13 +98,14 @@ X で追加した直後のモジュールは、最初から移動モードにな
 
 Start でメインメニュー、X でモジュールの追加が開きます。十字キーで選び、A で決定、B で 1 つ前に戻る、L1 / R1 でページ送りです。
 
-![メインメニュー。各行にアイコンが付き、1 行目の Pause が選ばれている](images/README-menu.png)
+![メインメニュー。各行にアイコンが付き、2 行目の Chat… が選ばれている](images/README-menu.png)
 
 メインメニュー。ツールバーやモジュールパレットはタッチ専用なので、同じ機能へここから行けるようにしてあります。
 
 | 項目 | 内容 |
 |---|---|
 | Pause / Play | 一時停止 / 再生 |
+| Chat… | チャットでパッチを変える（「チャットでパッチを組む」の節） |
 | Add module… | 検索、タグ、種類（MUTABLE、VCO、LFO、VCF …）からモジュールを選ぶ（次の節） |
 | Move module | フォーカス中のモジュールを移動する |
 | Module menu… | フォーカス中のモジュールのメニュー（初期化、複製、削除、バイパス、プリセット） |
@@ -131,6 +134,64 @@ X で開く一覧の先頭に、**Search…** と **Tags…** があります。
 タグはモジュールの種類ごとに付きます（パッチには入りません）。Nova の `/sdcard/Android/data/org.rackdroid.test/files/module-tags.json` に保存され、`tools/novasync tags` で Mac に取り出せます。
 
 分類には、波形やメーターを見るモジュールを集めた **VISUAL** を足しました。タッチ用パレットの検索も、同じ探し方になっています。
+
+## チャットでパッチを組む
+
+Start →「Chat…」か、ツールバーの折りたたみ矢印の左の吹き出しで、画面の右にチャットが出ます。してほしいことを書くと、モジュールの追加、配線、つまみの設定をその場で行います。日本語でも英語でも通じます。
+
+![右にチャット。エコーとリバーブを頼むと、+Delay +Plateau、5 cables、6 knobs と、日本語の返事が出ている。左のラックには Delay と Plateau がつながっている](images/README-chat.png)
+
+上の橙の行が、パッチにしたことです。左のラックは、変わった場所へ自動で動きます。
+
+| ボタン | 打つとき | 読むとき |
+|---|---|---|
+| 十字キー | キーを選ぶ | ↑↓ で会話を送る |
+| A | そのキーを打つ | 打つ画面へ |
+| Y | 1 字消す | 答えの最中：止める。それ以外：前の答えの変更を取り消す |
+| Start | 送る | 打つ画面へ |
+| X | 読む画面へ | 打つ画面へ |
+| L1 / R1 | 会話を送る | 会話を送る |
+| Select | 一時停止 / 再生 | 一時停止 / 再生 |
+| B | 閉じる | 閉じる（答えの最中なら、裏で続く） |
+
+- 入力欄に触れると Android のキーボードが出ます。日本語や声の入力はそちらで（Gboard に日本語を足しておきます）。
+- **1 回の依頼が、Undo 1 回**で元に戻ります。途中で止めた分も同じです。「元に戻して」と書いても戻ります。
+- 指でのラックの操作は、チャットを出したままでもできます。
+- つまみを選んだままチャットを開いて「これ」と書くと、そのモジュールのことだと伝わります。
+- Claude は音を聞けません。出力の電圧を 1 秒ほど測って、音が届いているかを確かめています。
+- 会話はアプリを終えるまで続きます。「＋」で新しく始めます。ツールバーの南京錠をかけると、チャットからも変えられません。
+
+### 仕組み
+
+![Nova の中の RackDroid と、Termux の中の橋渡しと Claude Code がやり取りし、Claude Code だけがインターネット越しに Anthropic とつながる図](images/README-chat-how.png)
+
+依頼とパッチの内容は、Claude Code から Anthropic に送られます。費用は、Claude Code にログインした契約（Pro / Max など）の使用枠です。API キーは使いません。
+
+- RackDroid に Claude のログインの機能はなく、Claude Code も同梱していません。Termux に自分で入れ、自分でログインします（[Anthropic の決まり](https://code.claude.com/docs/en/legal-and-compliance)に沿うため）。
+- Claude に渡す道具は、パッチの操作だけです。ファイル、コマンド、Web は使えません。
+- Claude Code は Android を公式の対象にしていません。更新で動かなくなることがあります。
+
+### 用意（1 回だけ）
+
+1. [Termux](https://github.com/termux/termux-app) を入れる（Play 版は機能に制限があるので、GitHub か F-Droid の版）。
+2. Termux で、Debian を入れる。
+   ```sh
+   pkg update && pkg install proot-distro && proot-distro install debian
+   ```
+3. Debian に、Python と Claude Code を入れてログインする（[公式の apt の手順](https://code.claude.com/docs/en/setup)）。
+   ```sh
+   proot-distro login debian
+   apt-get update && apt-get install -y ca-certificates curl gnupg python3
+   # ここで公式の手順に従って claude-code を入れる
+   claude auth login
+   ```
+4. RackDroid が Termux のプログラムを始められるようにする。`~/.termux/termux.properties` に次の 1 行を足し、Termux を開き直す。
+   ```
+   allow-external-apps = true
+   ```
+5. RackDroid でチャットを開き、Android の許可画面で「ALLOW」を押す。これは、RackDroid が Termux の中でコマンドを実行できるようになる強い権限です。実際に始めるのは橋渡し（`nova_bridge.py`）だけで、やめるときは Android の設定で外せます。
+
+答えるモデルは Opus です。Termux で動く橋渡しの記録は `~/nova-chat/bridge.log` に残ります。RackDroid を閉じると、橋渡しも約 2 分で終わります。
 
 ## 演奏：スティック・傾き・タッチパッドを CV に
 
@@ -251,7 +312,8 @@ adb install -r app/build/outputs/apk/sideload/release/app-sideload-release.apk
 - Nova（Android 13）でだけ確かめています。ほかのゲームパッドは、十字キーがキーでも軸でも届くように作ってありますが、試していません。
 - 音の遅れは Nova で合計およそ 50 ms です（本家と同じ。Nova が最速のオーディオ経路を許可しないため）。
 - 傾きの向きと効き具合は、いまの設定でいったん確定しています（細かい調整はしていません）。
+- チャットは Nova でだけ確かめています（9〜28 モジュールのパッチ）。答えるまでの時間は、質問で 1〜4 秒、変更で 6〜20 秒でした。Gboard で日本語を変換して打つこと、長い会話、数時間の使用は試していません。チャットは Play 版のビルドには入りません（通信の権限がないため）。
 - MIDI（USB キーボード、外部機器、Mac の DAW、Bluetooth）は本家の機能のままで、この fork では機材がなく確かめていません。
 - 足した 5 モジュールは、Mac 上の検証（`nova/plugin/test/run.sh`：Plaits の 24 モデルが全部鳴ること、音程が 1 V/oct に合うこと、Peaks のエンベロープ、Blades のフィルター、Beads のグレインとシンセ）と、Nova での録音で確かめています。実機のモジュールとの聴き比べはしていません。元にした BrickRack も v0.1 です。
 - 足した 5 モジュールのうち、ポリフォニックなのは MACRO OSC 2 だけです。
-- 改造の中心は `native/port/{gamepad_*,transport,signal_flow}.cpp` と `app/src/main/java/org/rackdroid/{GamepadMenu,PadList,PadTextDialog,PadKeyboard,ModuleTags,TiltSensor,XyPad,MutableOrigin}.kt`、足したモジュールは `nova/plugin/` です。VCV Rack 本体（`third_party/`）には手を入れていません。
+- 改造の中心は `native/port/{gamepad_*,transport,signal_flow,patch_ops}.cpp` と `app/src/main/java/org/rackdroid/{GamepadMenu,PadList,PadTextDialog,PadKeyboard,ModuleTags,TiltSensor,XyPad,MutableOrigin,ChatPanel,PatchServer,TermuxBridge}.kt`、チャットの橋渡しは `nova/bridge/`、足したモジュールは `nova/plugin/` です。VCV Rack 本体（`third_party/`）には手を入れていません。

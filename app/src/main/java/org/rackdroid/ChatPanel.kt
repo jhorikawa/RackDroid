@@ -125,14 +125,14 @@ class ChatPanel(
 		if (granted)
 			connect()
 		else
-			note("Without that permission RackDroid cannot start Claude Code in Termux.")
+			fail("Without that permission RackDroid cannot start Claude Code in Termux.")
 	}
 
 	/* ---- Getting someone to answer ---- */
 
 	private fun connect() {
 		if (!server.start()) {
-			note("This build cannot open the chat link.")
+			fail("This build cannot open the chat link.")
 			return
 		}
 		if (server.bridgeConnected) {
@@ -148,14 +148,21 @@ class ChatPanel(
 				ui.postDelayed({
 					if (startedAt == mine && !server.bridgeConnected) {
 						startedAt = 0L
-						note(TermuxBridge.SETUP)
+						fail(TermuxBridge.SETUP)
 					}
 				}, START_MS)
 			}
-			TermuxBridge.Outcome.NO_TERMUX -> note("The chat is answered by Claude Code in Termux, and Termux is not installed.")
+			TermuxBridge.Outcome.NO_TERMUX -> fail("The chat is answered by Claude Code in Termux, and Termux is not installed.")
 			TermuxBridge.Outcome.ASKED -> {}
-			TermuxBridge.Outcome.FAILED -> note(TermuxBridge.SETUP)
+			TermuxBridge.Outcome.FAILED -> fail(TermuxBridge.SETUP)
 		}
+	}
+
+	/** There is nobody to answer, and what has been asked is not left waiting. */
+	private fun fail(text: String) {
+		unsent = null
+		finish(text)
+		refreshStatus()
 	}
 
 	private fun onEvent(o: JSONObject) {
