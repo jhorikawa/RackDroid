@@ -9,8 +9,8 @@
  *   A            knob: edit (D-pad up/down coarse, left/right fine)
  *                switch: step it; a momentary button is held while A is held
  *                jack: start a cable, then A on another jack to connect
- *   B            back: leave edit, cancel the cable, and with nothing left to
- *                back out of, put the focus ring away
+ *   B            back: leave edit, cancel the cable; from a control, step out
+ *                to the module it is on; from a module, put the ring away
  *   Y            clear: reset the focused knob, unplug the focused jack
  *   right stick  turn the focused knob directly
  *   left stick   pan the rack
@@ -30,6 +30,16 @@
  *                down, B puts it back
  *   START        main menu (GamepadMenu.kt): the Rack menus, undo/redo, the
  *                toolbar's tools, the focused module's own menu
+ *
+ * With a whole module selected (B from any control on it):
+ *
+ *   D-pad        select the next module in that direction
+ *   A            tapped: go in, to the module's controls
+ *                held, with the D-pad: carry the module; letting go sets it down
+ *   Y            held for half a second: delete the module
+ *
+ * What the buttons do where the focus is now is written at the bottom of the
+ * screen for as long as the ring shows.
  *
  * Parameters are changed through their ParamQuantity, not by faking a drag, so
  * every plugin's controls behave the same. Changes and cables go on the undo
@@ -59,6 +69,7 @@
 #include <engine/PortInfo.hpp>
 #include <history.hpp>
 #include <plugin/Model.hpp>
+#include <plugin/Plugin.hpp>
 #include <system.hpp>
 #include <widget/Widget.hpp>
 #include <window/Window.hpp>
@@ -120,6 +131,10 @@ static bool g_editing = false;
 static bool g_momentary = false;
 static bool g_cabling = false;
 static Focus g_cableFrom;
+/** The focus is on whole modules (FOCUS_MODULE), not on the controls in them. */
+static bool g_moduleLevel = false;
+/** When Y went down on a module, or 0: held long enough, it deletes it. */
+static double g_deleteSince = 0.0;
 /** The rack is scrolling after the focus. */
 static bool g_follow = false;
 /** The left stick or the triggers moved the view since the focus last moved,
@@ -144,6 +159,9 @@ static float g_snapAcc = 0.f;
 static const double REPEAT_DELAY = 0.32;
 static const double REPEAT_MOVE = 0.09;
 static const double REPEAT_EDIT = 0.035;
+/** How long Y is held to delete a module. Long enough to let go of by mistake,
+short enough not to need a question on top of it. */
+static const double DELETE_HOLD = 0.5;
 static const float STICK_DEADZONE = 0.18f;
 static const float TRIGGER_DEADZONE = 0.08f;
 /** Scene units kept clear around the focused control when scrolling to it. */
@@ -154,20 +172,21 @@ static const float ZOOM_LEVELS[] = {1.f, 2.f, 0.5f};
 
 /** Asked for from GamepadMenu.kt on the UI thread, carried out here on the
 render thread. Matches the constants there. */
-enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1, CMD_MOVE_MODULE = 2 };
+enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1, CMD_MOVE_MODULE = 2, CMD_DELETE_MODULE = 3 };
 static std::atomic<int> g_command{CMD_NONE};
 
 /** A module is being carried by the D-pad. */
 static bool g_moving = false;
 static int64_t g_moveId = -1;
-/** L1 or R1 is down (which one, or -1), and whether the D-pad has been used
-with it. A shoulder button acts when it is let go: used with the D-pad it was
-a grip on the module, and on its own it was a tap. */
-static int g_shoulderHeld = -1;
-static bool g_shoulderUsed = false;
+/** The button gripping the module (L1 or R1, or A with a whole module
+selected), or -1, and whether the D-pad has been used with it. These act when
+they are let go: used with the D-pad it was a grip on the module, and on its
+own it was a tap. */
+static int g_gripHeld = -1;
+static bool g_gripUsed = false;
 /** Letting go counts as a tap. Not when the press was what brought the ring
 back: that press has done its job already. */
-static bool g_shoulderTap = false;
+static bool g_gripTap = false;
 
 
 // --- lookups ----------------------------------------------------------------
@@ -204,6 +223,17 @@ static widget::Widget* widgetOf(const Focus& f) {
 }
 
 
+/** The toolbar's padlocks hold for the controller as they do for a finger: the
+outline one freezes where modules are and how they are patched, the solid one
+the knobs as well. Says so when it stops something. */
+static bool lockedFor(int level) {
+	if (touchLockMode() < level)
+		return false;
+	showToast(level >= 2 ? "Locked: controls cannot be changed" : "Locked: the layout cannot be changed");
+	return true;
+}
+
+
 /** Shown all the way up to its module: plugins hide controls by hiding a
 parent (alternate panels, collapsed sections). */
 static bool shownIn(widget::Widget* w, widget::Widget* top) {
@@ -212,6 +242,17 @@ static bool shownIn(widget::Widget* w, widget::Widget* top) {
 			return false;
 	}
 	return w->box.size.x > 0.f && w->box.size.y > 0.f;
+}
+
+
+/** The module itself, as something to focus. */
+static Item panelItem(app::ModuleWidget* mw) {
+	Item it;
+	it.focus.moduleId = mw->module->id;
+	it.focus.kind = FOCUS_MODULE;
+	it.focus.id = 0;
+	it.pos = mw->getRelativeOffset(mw->box.size.mult(0.5f), rackWidget());
+	return it;
 }
 
 
@@ -242,12 +283,7 @@ static void collect(app::ModuleWidget* mw, std::vector<Item>& out) {
 	}
 	if (out.size() == before) {
 		// Nothing on the panel to stand on: the panel itself.
-		Item it;
-		it.focus.moduleId = mw->module->id;
-		it.focus.kind = FOCUS_MODULE;
-		it.focus.id = 0;
-		it.pos = mw->getRelativeOffset(mw->box.size.mult(0.5f), rack);
-		out.push_back(it);
+		out.push_back(panelItem(mw));
 	}
 }
 
@@ -317,8 +353,11 @@ static void setFocus(const Focus& f) {
 	closeHistory();
 	g_editing = false;
 	g_snapAcc = 0.f;
+	g_deleteSince = 0.0;
 	g_focus = f;
-	g_remembered[f.moduleId] = f;
+	// Where to come back to inside a module: its panel is not a place in it.
+	if (!g_moduleLevel)
+		g_remembered[f.moduleId] = f;
 	g_follow = true;
 	g_viewMoved = false;
 }
@@ -346,6 +385,21 @@ static void pickNearCentre() {
 	float best = INFINITY;
 	Focus pick;
 	for (app::ModuleWidget* mw : rack->getModules()) {
+		if (g_moduleLevel) {
+			if (!mw->module)
+				continue;
+			// How far the middle of the screen is from the panel: the one it
+			// lies on, however wide, is the nearest.
+			math::Vec o = mw->getAbsoluteOffset(math::Vec(0.f, 0.f));
+			math::Vec e = mw->getAbsoluteOffset(mw->box.size);
+			math::Vec near(math::clamp(centre.x, o.x, e.x), math::clamp(centre.y, o.y, e.y));
+			float d = near.minus(centre).square();
+			if (d < best) {
+				best = d;
+				pick = panelItem(mw).focus;
+			}
+			continue;
+		}
 		std::vector<Item> items;
 		collect(mw, items);
 		for (const Item& it : items) {
@@ -424,6 +478,21 @@ static void moveFocus(math::Vec dir) {
 	if (!rack || !cur)
 		return;
 	math::Vec from = cur->getRelativeOffset(cur->box.size.mult(0.5f), rack);
+	if (g_moduleLevel) {
+		// Sideways along the row, up and down between rows: a module is never
+		// "a little above" another one.
+		std::vector<Item> row, rows;
+		for (app::ModuleWidget* mw : rack->getModules()) {
+			if (!mw->module)
+				continue;
+			Item it = panelItem(mw);
+			(std::fabs(it.pos.y - from.y) < app::RACK_GRID_HEIGHT * 0.5f ? row : rows).push_back(it);
+		}
+		Focus next;
+		if (pickToward(dir.x != 0.f ? row : rows, from, dir, false, next))
+			setFocus(next);
+		return;
+	}
 	std::vector<Item> own, others;
 	for (app::ModuleWidget* mw : rack->getModules()) {
 		if (!mw->module)
@@ -485,10 +554,13 @@ static void stepModule(int delta) {
 		if (mods[i]->module->id == g_focus.moduleId)
 			at = i;
 	}
-	// A module with nothing to focus (a blank, a notes panel) is stepped over.
 	for (int tries = 0; tries < n; tries++) {
 		at = ((at + delta) % n + n) % n;
 		app::ModuleWidget* mw = mods[at];
+		if (g_moduleLevel) {
+			setFocus(panelItem(mw).focus);
+			return;
+		}
 		auto mem = g_remembered.find(mw->module->id);
 		if (mem != g_remembered.end() && widgetOf(mem->second) && allowed(mem->second)) {
 			setFocus(mem->second);
@@ -500,6 +572,38 @@ static void stepModule(int delta) {
 			return;
 		}
 	}
+}
+
+
+/** From a control to the module it is on. */
+static void stepOut() {
+	Focus f;
+	f.moduleId = g_focus.moduleId;
+	f.kind = FOCUS_MODULE;
+	f.id = 0;
+	g_moduleLevel = true;
+	setFocus(f);
+	g_follow = true;
+}
+
+
+/** From a module to its controls: the one last used, or the first. */
+static void stepIn() {
+	app::ModuleWidget* mw = rackWidget() ? rackWidget()->getModule(g_focus.moduleId) : NULL;
+	if (!mw)
+		return;
+	Focus to;
+	auto mem = g_remembered.find(g_focus.moduleId);
+	if (mem != g_remembered.end() && widgetOf(mem->second))
+		to = mem->second;
+	else if (!firstItemOf(mw, to))
+		return;
+	if (to.kind == FOCUS_MODULE) {
+		showToast("This module has no knobs or jacks");
+		return;
+	}
+	g_moduleLevel = false;
+	setFocus(to);
 }
 
 
@@ -520,7 +624,7 @@ static app::ModuleWidget* movingModule() {
 static void beginMove(int64_t moduleId) {
 	app::RackWidget* rack = rackWidget();
 	app::ModuleWidget* mw = rack ? rack->getModule(moduleId) : NULL;
-	if (!mw)
+	if (!mw || lockedFor(1))
 		return;
 	releaseMomentary();
 	closeHistory();
@@ -633,6 +737,52 @@ static void moveStep(int button) {
 }
 
 
+// --- deleting a module ------------------------------------------------------
+
+/** Deletes the focused module, cables and all, as one undo step, and selects
+whatever is nearest to the hole: a press that deletes one module is often
+followed by another. */
+static void deleteFocusedModule() {
+	app::RackWidget* rack = rackWidget();
+	app::ModuleWidget* mw = rack ? rack->getModule(g_focus.moduleId) : NULL;
+	g_deleteSince = 0.0;
+	if (!mw || lockedFor(1))
+		return;
+	if (g_moving)
+		endMove(true);
+	releaseMomentary();
+	closeHistory();
+	g_editing = false;
+	g_cabling = false;
+
+	math::Vec at = mw->box.getCenter();
+	std::string name = mw->model ? mw->model->name : "module";
+	g_remembered.erase(g_focus.moduleId);
+	// Deletes the widget and its module.
+	mw->removeAction();
+
+	app::ModuleWidget* best = NULL;
+	float bestD = INFINITY;
+	for (app::ModuleWidget* other : rack->getModules()) {
+		if (!other->module)
+			continue;
+		math::Vec d = other->box.getCenter().minus(at);
+		// The same row first.
+		float score = std::fabs(d.x) + std::fabs(d.y) * 4.f;
+		if (score < bestD) {
+			bestD = score;
+			best = other;
+		}
+	}
+	g_focus = Focus();
+	if (best) {
+		g_moduleLevel = true;
+		setFocus(panelItem(best).focus);
+	}
+	showToast(("Deleted " + name + ".  START > Undo brings it back").c_str());
+}
+
+
 // --- actions ----------------------------------------------------------------
 
 static bool isSwitch(app::ParamWidget* pw) {
@@ -738,6 +888,8 @@ static void pressA() {
 		return;
 	}
 	if (g_focus.kind == FOCUS_PARAM) {
+		if (lockedFor(2))
+			return;
 		app::ParamWidget* pw = paramOf(g_focus);
 		if (isSwitch(pw)) {
 			pressSwitch(pw);
@@ -749,6 +901,8 @@ static void pressA() {
 		return;
 	}
 	if (!g_cabling) {
+		if (lockedFor(1))
+			return;
 		g_cabling = true;
 		g_cableFrom = g_focus;
 		return;
@@ -771,6 +925,11 @@ static void pressB() {
 		closeHistory();
 		return;
 	}
+	// Out of the controls, to the module they are on.
+	if (!g_moduleLevel && widgetOf(g_focus)) {
+		stepOut();
+		return;
+	}
 	// Nothing left to back out of: the ring goes away. The focus itself is
 	// kept, so the D-pad brings it back where it was.
 	releaseMomentary();
@@ -784,17 +943,21 @@ static void pressB() {
 static void pressY() {
 	if (!ensureFocus())
 		return;
-	if (g_focus.kind == FOCUS_MODULE)
+	if (g_focus.kind == FOCUS_MODULE) {
+		// Done in gamepadNavStep() if it is still held by then.
+		if (!lockedFor(1))
+			g_deleteSince = system::getTime();
 		return;
+	}
 	if (g_focus.isPort()) {
 		// Not while a cable is being run from here: B cancels that.
 		app::PortWidget* port = g_cabling ? NULL : portOf(g_focus);
-		if (port)
+		if (port && !lockedFor(1))
 			unplug(port);
 		return;
 	}
 	app::ParamWidget* pw = paramOf(g_focus);
-	if (!pw)
+	if (!pw || lockedFor(2))
 		return;
 	closeHistory();
 	pw->resetAction();
@@ -849,19 +1012,28 @@ void gamepadNavButton(int button, bool down) {
 			g_dirHeld = -1;
 		if (button == PAD_A)
 			releaseMomentary();
-		if (button == g_shoulderHeld) {
-			g_shoulderHeld = -1;
-			if (g_shoulderUsed) {
+		if (button == PAD_Y)
+			g_deleteSince = 0.0;
+		if (button == g_gripHeld) {
+			g_gripHeld = -1;
+			if (g_gripUsed) {
 				// It was a grip: the module is set down where it is.
 				if (g_moving)
 					endMove(true);
 			}
-			else if (g_shoulderTap && g_active && !g_moving && ensureFocus()) {
-				stepModule(button == PAD_L1 ? -1 : 1);
+			else if (g_gripTap && g_active && !g_moving && ensureFocus()) {
+				if (button == PAD_A)
+					stepIn();
+				else
+					stepModule(button == PAD_L1 ? -1 : 1);
 			}
 		}
 		return;
 	}
+
+	// Anything else pressed while Y is held is a change of mind.
+	if (button != PAD_Y)
+		g_deleteSince = 0.0;
 
 	// Buttons that have nothing to do with the focus work whether or not the
 	// ring is showing, and do not bring it out.
@@ -892,12 +1064,16 @@ void gamepadNavButton(int button, bool down) {
 		return;
 	}
 
-	if (g_shoulderHeld >= 0 && isDir && g_active && !g_moving) {
-		// A shoulder button held and the D-pad pressed: pick the focused
-		// module up, with no menu and no mode to leave afterwards.
+	if (g_gripHeld >= 0 && isDir && g_active && !g_moving) {
+		// A grip and the D-pad pressed: pick the focused module up, with no
+		// menu and no mode to leave afterwards.
 		if (rackWidget()->getModule(g_focus.moduleId)) {
 			beginMove(g_focus.moduleId);
-			g_shoulderUsed = true;
+			g_gripUsed = true;
+			// Not picked up (the layout is locked): the D-pad does nothing
+			// else while the grip is held.
+			if (!g_moving)
+				return;
 		}
 	}
 
@@ -932,9 +1108,9 @@ void gamepadNavButton(int button, bool down) {
 		if (button == PAD_L1 || button == PAD_R1) {
 			// Still a grip, though: held, it frames the module the D-pad
 			// would carry, so nothing moves unseen. Only the tap is spent.
-			g_shoulderHeld = button;
-			g_shoulderUsed = false;
-			g_shoulderTap = false;
+			g_gripHeld = button;
+			g_gripUsed = false;
+			g_gripTap = false;
 		}
 		return;
 	}
@@ -946,15 +1122,27 @@ void gamepadNavButton(int button, bool down) {
 		return;
 	}
 	switch (button) {
-		case PAD_A: pressA(); break;
+		case PAD_A:
+			if (g_moduleLevel) {
+				// Decided when it is let go, like a shoulder button: with the
+				// D-pad it carries the module, alone it goes in.
+				if (ensureFocus()) {
+					g_gripHeld = button;
+					g_gripUsed = false;
+					g_gripTap = true;
+				}
+				break;
+			}
+			pressA();
+			break;
 		case PAD_B: pressB(); break;
 		case PAD_Y: pressY(); break;
 		case PAD_L1:
 		case PAD_R1:
-			// Decided when it is let go: see g_shoulderHeld.
-			g_shoulderHeld = button;
-			g_shoulderUsed = false;
-			g_shoulderTap = true;
+			// Decided when it is let go: see g_gripHeld.
+			g_gripHeld = button;
+			g_gripUsed = false;
+			g_gripTap = true;
 			break;
 		default: break;
 	}
@@ -962,10 +1150,14 @@ void gamepadNavButton(int button, bool down) {
 
 
 void gamepadNavCancelHeld() {
+	// A module on its way when the buttons were taken away is set down.
+	if (g_moving && g_gripUsed)
+		endMove(true);
 	g_dirHeld = -1;
-	g_shoulderHeld = -1;
-	g_shoulderUsed = false;
-	g_shoulderTap = false;
+	g_deleteSince = 0.0;
+	g_gripHeld = -1;
+	g_gripUsed = false;
+	g_gripTap = false;
 	releaseMomentary();
 }
 
@@ -983,7 +1175,9 @@ void gamepadNavFocusModule(int64_t moduleId) {
 	// A module with nothing to focus (a blank panel) leaves the focus alone.
 	g_cabling = false;
 	Focus first;
-	if (firstItemOf(mw, first))
+	if (g_moduleLevel)
+		setFocus(panelItem(mw).focus);
+	else if (firstItemOf(mw, first))
 		setFocus(first);
 	// Added from the controller: where it landed is nobody's choice, so it
 	// arrives already picked up. Added by a finger, it was dropped where the
@@ -1051,6 +1245,8 @@ static void turnWithStick(float dt) {
 	// A momentary button has nothing to turn.
 	app::Switch* sw = dynamic_cast<app::Switch*>(pw);
 	if (sw && sw->momentary)
+		return;
+	if (touchLockMode() >= 2)
 		return;
 	windowNoteInteraction();
 	float range = pq->getMaxValue() - pq->getMinValue();
@@ -1121,6 +1317,13 @@ static void followFocus(float dt) {
 	math::Rect view = clearView();
 	float left = view.pos.x + FOLLOW_MARGIN;
 	float right = view.pos.x + view.size.x - FOLLOW_MARGIN;
+	if (g_moving || g_focus.kind == FOCUS_MODULE) {
+		// A whole panel: from edge to edge, as far as there is room for it.
+		float half = p.x - w->getAbsoluteOffset(math::Vec(0.f, 0.f)).x;
+		half = std::fmin(half, (right - left) * 0.5f);
+		left += half;
+		right -= half;
+	}
 	float top = view.pos.y + FOLLOW_MARGIN;
 	float bottom = view.pos.y + view.size.y - FOLLOW_MARGIN;
 	if (bottom < top) {
@@ -1160,9 +1363,16 @@ void gamepadNavStep() {
 	// patch loaded.
 	if (g_focus.kind != FOCUS_NONE && !widgetOf(g_focus)) {
 		g_focus = Focus();
+		g_moduleLevel = false;
+		g_deleteSince = 0.0;
 		g_editing = false;
 		g_momentary = false;
 		g_histOpen = false;
+	}
+	if (g_deleteSince > 0.0) {
+		windowNoteInteraction();
+		if (now - g_deleteSince >= DELETE_HOLD)
+			deleteFocusedModule();
 	}
 	if (g_cabling && !widgetOf(g_cableFrom))
 		g_cabling = false;
@@ -1177,6 +1387,15 @@ void gamepadNavStep() {
 			if (rackWidget()->getModule(g_focus.moduleId)) {
 				g_active = true;
 				beginMove(g_focus.moduleId);
+			}
+			else {
+				showToast("Move the focus to a module first");
+			}
+			break;
+		case CMD_DELETE_MODULE:
+			if (rackWidget()->getModule(g_focus.moduleId)) {
+				g_active = true;
+				deleteFocusedModule();
 			}
 			else {
 				showToast("Move the focus to a module first");
@@ -1213,6 +1432,39 @@ static const NVGcolor RING = nvgRGB(0xFF, 0xDA, 0x9F);
 static const NVGcolor RING_EDIT = nvgRGB(0xFF, 0x8A, 0x3D);
 static const NVGcolor RING_CABLE = nvgRGB(0x6F, 0xD6, 0xFF);
 static const NVGcolor RING_MOVE = nvgRGB(0x8D, 0xE0, 0x7A);
+static const NVGcolor RING_DELETE = nvgRGB(0xFF, 0x5A, 0x4D);
+
+
+/** A button and what it does here, for the line at the bottom of the screen. */
+struct Hint {
+	const char* key;
+	const char* what;
+};
+
+
+/** What the buttons do where the focus is now. */
+static std::vector<Hint> hintsFor() {
+	if (movingModule()) {
+		if (g_gripHeld >= 0)
+			return {{"D-pad", "move"}, {"let go", "place"}};
+		return {{"D-pad", "move"}, {"A", "place"}, {"B", "put back"}};
+	}
+	if (g_gripHeld >= 0)
+		return {{"D-pad", "move the module"}};
+	if (g_moduleLevel)
+		return {{"A", "open"}, {"A + D-pad", "move"}, {"hold Y", "delete"}, {"X", "add"}, {"B", "hide"}};
+	if (g_cabling)
+		return {{"D-pad", "choose a jack"}, {"A", "connect"}, {"B", "cancel"}};
+	if (g_editing)
+		return {{"up/down", "coarse"}, {"left/right", "fine"}, {"A", "done"}, {"Y", "reset"}};
+	if (g_focus.kind == FOCUS_MODULE)
+		return {{"A", "pick up"}, {"hold Y", "delete"}, {"B", "module"}, {"X", "add"}, {"START", "menu"}};
+	if (g_focus.isPort())
+		return {{"A", "cable"}, {"Y", "unplug"}, {"B", "module"}, {"X", "add"}, {"START", "menu"}};
+	app::ParamWidget* pw = paramOf(g_focus);
+	return {{"A", pw && isSwitch(pw) ? "press" : "edit"}, {"Y", "reset"}, {"B", "module"}, {"X", "add"},
+		{"START", "menu"}};
+}
 
 
 static std::string describe(const Focus& f) {
@@ -1230,7 +1482,8 @@ static std::string describe(const Focus& f) {
 		}
 	}
 	else if (f.kind == FOCUS_MODULE) {
-		text += "   -   A to move";
+		if (mw && mw->model && mw->model->plugin)
+			text += "   -   " + mw->model->plugin->brand;
 	}
 	else if (f.isPort()) {
 		app::PortWidget* port = portOf(f);
@@ -1305,6 +1558,40 @@ struct GamepadOverlay : widget::Widget {
 		nvgResetScissor(args.vg);
 	}
 
+	/** The buttons and what they do here, on one line under the strip. Without
+	it there is no finding out what a button does but by pressing it. */
+	void drawHints(const DrawArgs& args) {
+		if (!APP->window->uiFont)
+			return;
+		std::vector<Hint> hints = hintsFor();
+		nvgFontFaceId(args.vg, APP->window->uiFont->handle);
+		nvgFontSize(args.vg, 11.5f);
+		nvgTextAlign(args.vg, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
+		static const float GAP = 4.f, SEP = 13.f;
+		auto width = [&](const char* t) {
+			float b[4];
+			return nvgTextBounds(args.vg, 0.f, 0.f, t, NULL, b);
+		};
+		float total = -SEP;
+		for (const Hint& h : hints)
+			total += width(h.key) + GAP + width(h.what) + SEP;
+		float h = 17.f;
+		float x = (box.size.x - total) * 0.5f;
+		float y = box.size.y - BOTTOM_INSET + 32.f;
+		nvgBeginPath(args.vg);
+		nvgRoundedRect(args.vg, x - 10.f, y, total + 20.f, h, h * 0.5f);
+		nvgFillColor(args.vg, nvgRGBA(0x1C, 0x18, 0x13, 0xD8));
+		nvgFill(args.vg);
+		for (const Hint& hint : hints) {
+			nvgFillColor(args.vg, RING);
+			nvgText(args.vg, x, y + h * 0.5f, hint.key, NULL);
+			x += width(hint.key) + GAP;
+			nvgFillColor(args.vg, nvgRGB(0xD8, 0xCF, 0xBD));
+			nvgText(args.vg, x, y + h * 0.5f, hint.what, NULL);
+			x += width(hint.what) + SEP;
+		}
+	}
+
 	/** Which mode the right stick is in: said in full for a moment after R3,
 	then kept as a small tag for as long as play mode lasts, since a stick that
 	has stopped turning knobs needs explaining. */
@@ -1361,40 +1648,58 @@ struct GamepadOverlay : widget::Widget {
 	void drawMoving(const DrawArgs& args, app::ModuleWidget* mw) {
 		drawFrame(args, mw, RING_MOVE, 3.f, 0x26);
 		std::string name = mw->model ? mw->model->name : "module";
-		drawStrip(args, g_shoulderHeld >= 0
-			? "MOVE:  " + name + "   -   let go to set it down"
-			: "MOVE:  " + name + "   -   D-pad moves, A places, B puts back", RING_MOVE);
+		drawStrip(args, "MOVE:  " + name, RING_MOVE);
+	}
+
+	/** Y being held on a module: the panel fills up with red, and what is left
+	of it is how long there is to let go. */
+	void drawDeleting(const DrawArgs& args, app::ModuleWidget* mw) {
+		float t = math::clamp((float) ((system::getTime() - g_deleteSince) / DELETE_HOLD), 0.f, 1.f);
+		math::Vec o = mw->getAbsoluteOffset(math::Vec(0.f, 0.f));
+		math::Vec e = mw->getAbsoluteOffset(mw->box.size);
+		float h = (e.y - o.y) * t;
+		nvgBeginPath(args.vg);
+		nvgRect(args.vg, o.x, e.y - h, e.x - o.x, h);
+		nvgFillColor(args.vg, nvgTransRGBA(RING_DELETE, 0x80));
+		nvgFill(args.vg);
+		drawFrame(args, mw, RING_DELETE, 3.f, 0);
+		drawStrip(args, "DELETE:  " + (mw->model ? mw->model->name : "module") + "   -   keep holding Y", RING_DELETE);
 	}
 
 	void draw(const DrawArgs& args) override {
 		drawMode(args);
+		drawFocus(args);
+		if (movingModule() || (g_active && widgetOf(g_focus)))
+			drawHints(args);
+		widget::Widget::draw(args);
+	}
+
+	void drawFocus(const DrawArgs& args) {
 		if (app::ModuleWidget* moving = movingModule()) {
 			drawMoving(args, moving);
-			widget::Widget::draw(args);
 			return;
 		}
 		widget::Widget* w = g_active ? widgetOf(g_focus) : NULL;
-		if (!w) {
-			widget::Widget::draw(args);
+		if (!w)
 			return;
-		}
 		NVGcolor col = g_cabling ? RING_CABLE : (g_editing || g_momentary) ? RING_EDIT : RING;
-		if (g_focus.kind == FOCUS_MODULE) {
-			drawFrame(args, w, RING, 2.2f, 0);
-			drawStrip(args, describe(g_focus), RING);
-			widget::Widget::draw(args);
-			return;
-		}
 		// Which module the focused control belongs to. "Move module" and
 		// "Module menu" act on it, and a ring on one small knob does not say
 		// which panel that is.
 		app::ModuleWidget* owner = rackWidget()->getModule(g_focus.moduleId);
-		if (owner && g_shoulderHeld >= 0) {
-			// L1/R1 is down: say what the D-pad would do now.
-			drawFrame(args, owner, RING_MOVE, 2.2f, 0);
-			std::string name = owner->model ? owner->model->name : "module";
-			drawStrip(args, "D-pad moves " + name + "   -   let go to set it down", RING_MOVE);
-			widget::Widget::draw(args);
+		if (owner && g_deleteSince > 0.0) {
+			drawDeleting(args, owner);
+			return;
+		}
+		if (owner && g_gripHeld >= 0) {
+			// A grip is down: say what the D-pad would do now.
+			drawFrame(args, owner, RING_MOVE, g_moduleLevel ? 3.5f : 2.2f, 0);
+			drawStrip(args, describe(g_focus), RING_MOVE);
+			return;
+		}
+		if (g_focus.kind == FOCUS_MODULE) {
+			drawFrame(args, w, RING, g_moduleLevel ? 3.5f : 2.2f, g_moduleLevel ? 0x20 : 0);
+			drawStrip(args, (g_moduleLevel ? "MODULE:  " : "") + describe(g_focus), RING);
 			return;
 		}
 		if (owner)
@@ -1423,7 +1728,6 @@ struct GamepadOverlay : widget::Widget {
 		else if (g_editing)
 			text = "EDIT:  " + text;
 		drawStrip(args, text, col);
-		widget::Widget::draw(args);
 	}
 };
 

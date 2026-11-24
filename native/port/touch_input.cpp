@@ -317,6 +317,11 @@ static void toggleSelection(rack::app::ModuleWidget* mw) {
 	APP->scene->rack->select(mw, !APP->scene->rack->isSelected(mw));
 }
 
+int touchLockMode() {
+	return lockMode.load(std::memory_order_relaxed);
+}
+
+
 /** Decide from the freshly-hovered widget whether this press is frozen.
  * Called after handleHover so APP->event->hoveredWidget is the touch
  * target. Layout lock: a press whose deepest target IS a ModuleWidget is a

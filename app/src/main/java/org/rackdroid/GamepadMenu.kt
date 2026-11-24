@@ -72,6 +72,7 @@ class GamepadMenu(
 		/** Matches GamepadCommand in gamepad_nav.cpp. */
 		const val CMD_MODULE_MENU = 1
 		const val CMD_MOVE_MODULE = 2
+		const val CMD_DELETE_MODULE = 3
 
 		// Icons as SVG path data on a 24 x 24 grid. The filled ones are
 		// Material Design icons (Apache 2.0), the family the toolbar's own
@@ -199,6 +200,7 @@ class GamepadMenu(
 			Row("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
 			Row("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
 			Row("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
+			Row("Delete module", res(R.drawable.ic_tb_delete)) to { command(CMD_DELETE_MODULE) },
 			Row("XY pad", line(LINE_XY)) to { toggleXyPad() },
 			Row("Undo", res(R.drawable.ic_tb_undo)) to { history(0) },
 			Row("Redo", res(R.drawable.ic_tb_redo)) to { history(1) },
