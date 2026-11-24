@@ -450,6 +450,7 @@ static std::string opAdd(json_t* req) {
 	history::ModuleAdd* h = new history::ModuleAdd;
 	h->setModule(mw);
 	group()->push(h);
+	gamepadNavShow(module->id);
 	return "Added " + nameOf(mw) + " (" + modelKey(model) + ")\n" + describe(module, mw);
 }
 
@@ -523,6 +524,7 @@ static std::string opConnect(json_t* req) {
 	history::CableAdd* h = new history::CableAdd;
 	h->setCable(cw);
 	group()->push(h);
+	gamepadNavShow(in->module->id);
 	return "Connected " + cableText(cw) + replaced;
 }
 
@@ -565,6 +567,7 @@ static std::string opSet(json_t* req) {
 		h->oldValue = old;
 		h->newValue = now;
 		group()->push(h);
+		gamepadNavShow(m->id);
 	}
 	return nameOf(mw) + " " + paramText(pq);
 }
@@ -823,4 +826,9 @@ Java_org_rackdroid_PatchServer_nativePatchOp(JNIEnv* env, jobject, jbyteArray re
 	if (result)
 		env->SetByteArrayRegion(result, 0, (jsize) out.size(), (const jbyte*) out.data());
 	return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_rackdroid_ChatPanel_nativeChatInset(JNIEnv*, jobject, jint px) {
+	rackdroid::gamepadNavRightInset((int) px);
 }

@@ -82,7 +82,35 @@ class PatchServer(
 	@Volatile private var server: ServerSocket? = null
 	private var token = ByteArray(0)
 
+	/** This run of the app: a conversation does not outlive it. */
+	private val instance = random(8)
+
 	val running: Boolean get() = server != null
+
+	/** What the bridge says, and {"event": "bridge"} as it comes and goes. On
+	 * some thread of this server's. */
+	@Volatile var onEvent: ((JSONObject) -> Unit)? = null
+
+	val bridgeConnected: Boolean get() = clients.any { it.role == "bridge" }
+
+	/** {"chat": text}, {"stop": true} or {"new": true}. False without a bridge. */
+	fun toBridge(o: JSONObject): Boolean {
+		val bridge = clients.firstOrNull { it.role == "bridge" } ?: return false
+		Thread { bridge.send(o) }.start()
+		return true
+	}
+
+	/** How to find and recognise this app, for the bridge. */
+	fun linkJson(): String = JSONObject().put("port", PORT).put("token", String(token)).toString()
+
+	/** Takes back the last answer's changes. Not on the UI thread: it waits for
+	 * the render thread. Null when done, else what was wrong. */
+	fun undo(): String? {
+		val o = JSONObject(String(nativePatchOp("{\"op\":\"undo\"}".toByteArray())))
+		return if (o.optBoolean("ok")) null else o.optString("error")
+	}
+
+	private fun random(n: Int) = ByteArray(n).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
 
 	/** Returns false if this build may not listen (no INTERNET permission: the
 	 * Play build) or the port is taken. */
@@ -121,9 +149,7 @@ class PatchServer(
 			if (o.getInt("port") == PORT && o.getString("token").length == 64)
 				return o.getString("token").toByteArray()
 		}
-		val bytes = ByteArray(32)
-		SecureRandom().nextBytes(bytes)
-		val hex = bytes.joinToString("") { "%02x".format(it) }
+		val hex = random(32)
 		f.writeText(JSONObject().put("port", PORT).put("token", hex).toString())
 		return hex.toByteArray()
 	}
@@ -156,7 +182,7 @@ class PatchServer(
 			client.socket.tcpNoDelay = true
 			client.socket.soTimeout = 5000
 			val reader = BufferedReader(InputStreamReader(client.socket.getInputStream(), Charsets.UTF_8))
-			val nonce = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+			val nonce = random(16)
 			client.send(JSONObject().put("hello", "rackdroid").put("nonce", nonce))
 			val hello = JSONObject(readLine(reader) ?: return)
 			val theirs = hello.getString("nonce")
@@ -166,11 +192,16 @@ class PatchServer(
 				return
 			}
 			client.role = hello.getString("role")
-			client.send(JSONObject().put("proof", proof("server", nonce, theirs)))
+			client.send(JSONObject().put("proof", proof("server", nonce, theirs)).put("instance", instance))
 			client.socket.soTimeout = 0
 			log("connected: ${client.role}")
+			// The newest one answers. The other is told, or it would come back
+			// and the two would take turns.
 			if (client.role == "bridge")
-				clients.filter { it !== client && it.role == "bridge" }.forEach { it.close() }
+				clients.filter { it !== client && it.role == "bridge" }.forEach {
+					it.send(JSONObject().put("replaced", true))
+					it.close()
+				}
 			while (true) {
 				val line = readLine(reader) ?: break
 				if (line.isBlank())
@@ -183,7 +214,7 @@ class PatchServer(
 		} finally {
 			client.close()
 			clients.remove(client)
-			if (client.role == "bridge" && running)
+			if (client.role == "bridge" && running && !bridgeConnected)
 				toUsers(JSONObject().put("event", "bridge").put("connected", false))
 		}
 	}
@@ -223,6 +254,7 @@ class PatchServer(
 
 	private fun toUsers(o: JSONObject) {
 		clients.filter { it.role == "user" }.forEach { it.send(o) }
+		onEvent?.invoke(o)
 	}
 
 	/* ---- Operations ---- */

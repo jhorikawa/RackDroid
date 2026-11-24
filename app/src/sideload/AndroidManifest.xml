@@ -12,11 +12,20 @@
 	installer, which still shows its own confirmation screen. Android also
 	refuses any update signed with a different key than the installed app.
 
-	The Play build (src/play/) has neither, and its updater is a no-op.
+	RUN_COMMAND: Termux's own permission, asked for when the chat is first
+	opened: the chat is answered by a program in Termux, which the app starts
+	(TermuxBridge.kt).
+
+	The Play build (src/play/) has none of them, and its updater is a no-op.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
 	<uses-permission android:name="android.permission.INTERNET" />
 	<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+	<uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+
+	<queries>
+		<package android:name="com.termux" />
+	</queries>
 
 </manifest>

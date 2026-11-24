@@ -28,6 +28,13 @@ void gamepadNavCancelHeld();
 the controller's module menu is on the new module. */
 void gamepadNavFocusModule(int64_t moduleId);
 
+/** Scrolls until the module can be seen beside the chat's panel, if that is up.
+The focus stays where it is. A touch or a button stops it. */
+void gamepadNavShow(int64_t moduleId);
+
+/** Any thread: this many pixels on the right are covered (by the chat). */
+void gamepadNavRightInset(int px);
+
 /** What the cables should be told apart for (signal_flow.cpp): the module
 selected, or the module and jack focused. False when there is neither. */
 struct CableFocus {

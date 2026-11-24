@@ -10,9 +10,9 @@ Claude Code is run as it was published and as it was signed in by whoever owns
 the device; nothing here sees or handles that. It is given the tools below and
 no others: no files, no shell, no web.
 
-RackDroid must have its chat link on (START > Chat link). The port and the token
-are in its chat-link.json, which has to be copied to ~/.nova-chat-link.json
-(NOVA_CHAT_LINK names another place).
+RackDroid starts this itself, in Termux, when its chat is opened (TermuxBridge.kt)
+and hands it the port and the token. To try things from elsewhere, copy the app's
+chat-link.json to ~/.nova-chat-link.json, or name it in NOVA_CHAT_LINK.
 
 Python 3.9 or later, and nothing else.
 """
@@ -103,8 +103,10 @@ class Link:
         if not hmac.compare_digest(answer.get("proof", ""), proof("server")):
             self.sock.close()
             raise ConnectionError("that is not RackDroid, or the token is not its")
+        self.instance = answer.get("instance", "")
         self.sock.settimeout(None)
         self.closed = threading.Event()
+        self.replaced = False
         threading.Thread(target=self._read, daemon=True).start()
 
     def send(self, o):
@@ -119,6 +121,8 @@ class Link:
                 box = self.waiting.pop(o.get("id"), None) if "ok" in o else None
                 if box:
                     box.put(o)
+                elif o.get("replaced"):
+                    self.replaced = True
                 elif self.on_message:
                     self.on_message(o)
         except (OSError, ValueError):
@@ -311,6 +315,7 @@ class Claude:
         self.session = session
         self.busy = False
         self.stopped = False
+        self.talked = False
         self.asked = 0.0
         self.calls = 0
         self.proc = subprocess.Popen(cmd, cwd=WORK, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -378,6 +383,9 @@ class Claude:
                         self._event(event="tool", name=name, args=block.get("input", {}))
             elif kind == "result":
                 self.busy = False
+                self.talked = True
+                if self.session:
+                    remember(self.link.instance, self.session)
                 seconds = time.time() - self.asked
                 failed = bool(o.get("is_error"))
                 how = "stopped" if self.stopped else "failed" if failed else "done"
@@ -389,33 +397,61 @@ class Claude:
             self._event(event="done", ok=False, text="Claude Code stopped.", seconds=0, calls=self.calls)
 
 
+def remembered(instance):
+    """The conversation of this run of RackDroid, if there was one."""
+    try:
+        with open(os.path.join(WORK, "session.json")) as f:
+            o = json.load(f)
+        return o["session"] if o["instance"] == instance else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def remember(instance, session):
+    with open(os.path.join(WORK, "session.json"), "w") as f:
+        json.dump({"instance": instance, "session": session}, f)
+
+
 def run():
     inbox = queue.Queue()
     claude = None
-    session = None
+    patience = float(os.environ.get("NOVA_CHAT_TIMEOUT", "0"))
+    since = time.time()
     while True:
         try:
             link = Link("bridge", inbox.put)
         except (OSError, ValueError, KeyError) as e:
+            if patience and time.time() - since > patience:
+                log("RackDroid has gone; so does this")
+                if claude:
+                    claude.close()
+                return
             log("waiting for RackDroid:", e)
-            time.sleep(3)
+            time.sleep(2)
             continue
         log("connected to RackDroid")
+        session = remembered(link.instance)
         catalog = link.ask("catalog").get("text", "")
         if claude:
             claude.close()
         # Ready before the first message: starting takes a while.
-        claude = Claude(link, catalog, session)
+        try:
+            claude = Claude(link, catalog, session)
+        except OSError as e:
+            link.send({"event": "bridge", "connected": True})
+            link.send({"event": "error", "text": f"Claude Code cannot be started ({e})."})
+            return
         link.send({"event": "bridge", "connected": True})
         while not link.closed.is_set():
             try:
                 m = inbox.get(timeout=1)
             except queue.Empty:
                 continue
-            session = claude.session or session
+            session = claude.session if claude.talked else session
             if m.get("new") or not claude.alive():
                 claude.close()
                 session = None if m.get("new") else session
+                remember(link.instance, session)
                 claude = Claude(link, link.ask("catalog").get("text", ""), session)
                 link.send({"event": "bridge", "connected": True})
             if m.get("stop"):
@@ -430,7 +466,11 @@ def run():
                     claude.say(f"<patch>\n{now}</patch>\n\n{m['chat']}")
                 except OSError:
                     link.send({"event": "done", "ok": False, "text": "Claude Code could not be started.", "seconds": 0, "calls": 0})
-        session = claude.session or session
+        if link.replaced:
+            log("another bridge has taken over")
+            claude.close()
+            return
+        since = time.time()
         log("RackDroid went away")
 
 

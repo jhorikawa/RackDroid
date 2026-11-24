@@ -841,8 +841,16 @@ class MainActivity : NativeActivity() {
 		val handleRow = LinearLayout(this).apply {
 			orientation = LinearLayout.HORIZONTAL
 			gravity = Gravity.CENTER_HORIZONTAL
-			// Balanced by an empty cell, so the arrow stays in the middle.
-			addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(64), dp(26)))
+			addView(ImageButton(this@MainActivity).apply {
+				setImageResource(R.drawable.ic_tb_chat)
+				contentDescription = "Chat"
+				imageTintList = android.content.res.ColorStateList.valueOf(AppTheme.current.textPrimary)
+				scaleType = ImageView.ScaleType.FIT_CENTER
+				background = amberRippleRounded()
+				minimumWidth = 0; minimumHeight = 0
+				setPadding(dp(10), dp(4), dp(10), dp(4))
+				setOnClickListener { chatPanel.toggle() }
+			}, LinearLayout.LayoutParams(dp(64), dp(26)))
 			addView(collapseButton, LinearLayout.LayoutParams(dp(64), dp(26)))
 			addView(ImageButton(this@MainActivity).apply {
 				val isPaused = runCatching { nativeTransportPaused() }.getOrDefault(false)
@@ -1943,20 +1951,18 @@ class MainActivity : NativeActivity() {
 				nativeSetSignalFlow(it)
 			},
 			focusedModel = { nativeGamepadFocusedModel() },
-			chatLink = { patchServer.running },
-			setChatLink = { on ->
-				val ok = if (on) patchServer.start() else { patchServer.stop(); true }
-				novaPrefs.edit().putBoolean("chatLink", on && ok).apply()
-				if (!ok)
-					Toast.makeText(this, "The chat link cannot be opened in this build.", Toast.LENGTH_SHORT).show()
-			})
+			openChat = { chatPanel.toggle() })
 	}
 
-	/** The patch, for the chat's bridge (PatchServer.kt). */
+	/** The chat and what answers it: ChatPanel.kt, PatchServer.kt. */
 	private val patchServer by lazy {
 		PatchServer(this,
 			modelsJson = { nativeBrowserModelsJson() },
 			requestBuild = { nativeBrowserRequestBuild() })
+	}
+	private val chatPanel by lazy {
+		ChatPanel(this, patchServer, TermuxBridge(this, patchServer),
+			togglePause = { nativeTransportToggle() })
 	}
 
 	/** The handheld's tilt and a touch pad, as voltages for the patch
@@ -3204,8 +3210,6 @@ class MainActivity : NativeActivity() {
 			}
 			markStartupReady()
 			runCatching { nativeSetSignalFlow(novaPrefs.getBoolean("signalFlow", true)) }
-			if (novaPrefs.getBoolean("chatLink", false))
-				runCatching { patchServer.start() }
 			runCatching { nativeBrowserRequestBuild() }
 			runCatching { modulePalette.show() }
 			showStartupRecoveryDialog()
@@ -3410,6 +3414,8 @@ class MainActivity : NativeActivity() {
 
 	override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
 		super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+		if (requestCode == TermuxBridge.REQUEST && grantResults.isNotEmpty())
+			chatPanel.permissionAnswered(grantResults.all { it == android.content.pm.PackageManager.PERMISSION_GRANTED })
 		// Not on an empty answer: Android replies with empty arrays, at once and
 		// from inside requestPermissions, when a request is already on screen or
 		// cannot be shown -- and all{} of nothing is true. That sent this

@@ -60,10 +60,7 @@ class GamepadMenu(
 	private val setSignalFlow: (Boolean) -> Unit,
 	/** The key of the focused module's model, or "" (gamepad_nav.cpp). */
 	private val focusedModel: () -> String,
-	/** Whether a program on this device may read and change the patch
-	 * (PatchServer.kt). */
-	private val chatLink: () -> Boolean,
-	private val setChatLink: (Boolean) -> Unit,
+	private val openChat: () -> Unit,
 ) {
 	companion object {
 		const val MAIN = 0
@@ -206,6 +203,7 @@ class GamepadMenu(
 		val items = listOf<Pair<PadRow, () -> Unit>>(
 			if (paused()) PadRow("Play", res(R.drawable.ic_tb_play)) to { togglePause() }
 			else PadRow("Pause", res(R.drawable.ic_tb_pause)) to { togglePause() },
+			PadRow("Chat…", line(LINE_CHAT)) to { openChat() },
 			PadRow("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
 			PadRow("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
 			PadRow("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
@@ -213,7 +211,6 @@ class GamepadMenu(
 			PadRow("Delete module", res(R.drawable.ic_tb_delete)) to { command(CMD_DELETE_MODULE) },
 			PadRow("XY pad", line(LINE_XY)) to { toggleXyPad() },
 			PadRow(if (signalFlow()) "Signal flow: on" else "Signal flow: off", line(LINE_FLOW)) to { setSignalFlow(!signalFlow()) },
-			PadRow(if (chatLink()) "Chat link: on" else "Chat link: off", line(LINE_CHAT)) to { setChatLink(!chatLink()) },
 			PadRow("Undo", res(R.drawable.ic_tb_undo)) to { history(0) },
 			PadRow("Redo", res(R.drawable.ic_tb_redo)) to { history(1) },
 			PadRow("File…", fill(FILL_FILE)) to { openRackMenu(0) },

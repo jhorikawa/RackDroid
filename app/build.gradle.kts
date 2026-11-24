@@ -296,6 +296,10 @@ android {
 		getByName("main") {
 			assets.srcDir(layout.buildDirectory.dir("generated/assets"))
 		}
+		// The chat's bridge, which the app hands to Termux (TermuxBridge.kt).
+		getByName("sideload") {
+			assets.srcDir("../nova/bridge")
+		}
 	}
 
 	signingConfigs {

@@ -387,6 +387,12 @@ static void setFocus(const Focus& f) {
 }
 
 
+/** What the chat's panel covers on the right, in pixels. */
+static std::atomic<int> g_rightInsetPx{0};
+/** The module to be brought into view though nothing has the focus, or -1. */
+static int64_t g_shown = -1;
+
+
 /** The part of the rack view nothing sits on top of: below the toolbar, above
 the palette and the status strip, right of the cable bar. Scene units. */
 static math::Rect clearView() {
@@ -401,7 +407,10 @@ static math::Rect clearView() {
 	int bar[4];
 	if (cableParkBoundsPx(bar) && APP->window && bar[3] - bar[1] > 60 * APP->window->pixelRatio)
 		left = std::fmax(left, bar[2] / APP->window->pixelRatio);
-	return math::Rect(left, top, o.x + rs->box.size.x - left, bottom - top);
+	float right = o.x + rs->box.size.x;
+	if (APP->window)
+		right -= g_rightInsetPx.load(std::memory_order_relaxed) / APP->window->pixelRatio;
+	return math::Rect(left, top, std::fmax(1.f, right - left), bottom - top);
 }
 
 
@@ -1034,6 +1043,7 @@ void gamepadNavButton(int button, bool down) {
 	if (!APP || !APP->scene || !APP->scene->rack)
 		return;
 	windowNoteInteraction();
+	g_shown = -1;
 	bool isDir = button == PAD_UP || button == PAD_DOWN || button == PAD_LEFT || button == PAD_RIGHT;
 
 	if (!down) {
@@ -1212,6 +1222,18 @@ bool gamepadNavCableFocus(CableFocus& out) {
 }
 
 
+void gamepadNavShow(int64_t moduleId) {
+	// With the panel away, the user is at something else.
+	if (g_rightInsetPx.load(std::memory_order_relaxed) > 0)
+		g_shown = moduleId;
+}
+
+
+void gamepadNavRightInset(int px) {
+	g_rightInsetPx.store(px, std::memory_order_relaxed);
+}
+
+
 void gamepadNavFocusModule(int64_t moduleId) {
 	app::RackWidget* rack = rackWidget();
 	app::ModuleWidget* mw = rack ? rack->getModule(moduleId) : NULL;
@@ -1247,6 +1269,7 @@ static void openModuleMenu() {
 
 
 void gamepadNavNoteTouch() {
+	g_shown = -1;
 	// A finger on the screen sets a carried module down where it is.
 	if (g_moving)
 		endMove(true);
@@ -1349,20 +1372,15 @@ static void panAndZoom(float dt) {
 }
 
 
-static void followFocus(float dt) {
-	if (!g_follow || !g_active)
-		return;
-	widget::Widget* w = g_moving ? (widget::Widget*) movingModule() : widgetOf(g_focus);
+/** Scrolls until the middle of `w` (with `whole`, all of it across) is in the
+clear. Returns true once it is. */
+static bool bringIntoView(widget::Widget* w, bool whole, float dt) {
 	app::RackScrollWidget* rs = APP->scene->rackScroll;
-	if (!w || !rs) {
-		g_follow = false;
-		return;
-	}
 	math::Vec p = w->getAbsoluteOffset(w->box.size.mult(0.5f));
 	math::Rect view = clearView();
 	float left = view.pos.x + FOLLOW_MARGIN;
 	float right = view.pos.x + view.size.x - FOLLOW_MARGIN;
-	if (g_moving || g_focus.kind == FOCUS_MODULE) {
+	if (whole) {
 		// A whole panel: from edge to edge, as far as there is room for it.
 		float half = p.x - w->getAbsoluteOffset(math::Vec(0.f, 0.f)).x;
 		half = std::fmin(half, (right - left) * 0.5f);
@@ -1385,13 +1403,30 @@ static void followFocus(float dt) {
 		d.y = p.y - top;
 	else if (p.y > bottom)
 		d.y = p.y - bottom;
-	if (std::fabs(d.x) < 0.5f && std::fabs(d.y) < 0.5f) {
-		g_follow = false;
-		return;
-	}
+	if (std::fabs(d.x) < 0.5f && std::fabs(d.y) < 0.5f)
+		return true;
 	float k = 1.f - std::exp(-dt * 14.f);
 	rs->offset = rs->offset.plus(d.mult(k));
 	windowNoteInteraction();
+	return false;
+}
+
+
+static void followFocus(float dt) {
+	if (!APP->scene->rackScroll)
+		return;
+	if (g_shown >= 0) {
+		app::RackWidget* rack = rackWidget();
+		app::ModuleWidget* mw = rack ? rack->getModule(g_shown) : NULL;
+		if (!mw || bringIntoView(mw, true, dt))
+			g_shown = -1;
+		return;
+	}
+	if (!g_follow || !g_active)
+		return;
+	widget::Widget* w = g_moving ? (widget::Widget*) movingModule() : widgetOf(g_focus);
+	if (!w || bringIntoView(w, g_moving || g_focus.kind == FOCUS_MODULE, dt))
+		g_follow = false;
 }
 
 
