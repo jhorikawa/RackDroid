@@ -180,8 +180,9 @@ Start →「Chat…」か、ツールバーの折りたたみ矢印の左の吹�
 | できる | できない |
 |---|---|
 | いまのパッチを読む、説明する | 音を聞く（電圧を 1 秒ほど測るだけ） |
-| モジュールを探す、足す、消す、複製する、動かす・並べ替える | 入っていないモジュールのインストール |
-| ケーブルをつなぐ、抜く、つなぎ替える、重ねる | 新しいモジュールを作る、モジュールの中身を直す |
+| モジュールを探す、足す、消す、複製する、動かす・並べ替える | 入っていないモジュールのダウンロード |
+| ケーブルをつなぐ、抜く、つなぎ替える、重ねる | 入っているモジュールの中身を直す |
+| 新しいモジュールを作る、作ったものを直す（[次の節](#モジュールを作る)） | ファイルや通信を使うモジュール |
 | つまみ・スイッチ、モジュールのメニュー（モード、モデルなど）、プリセット | つまみやジャックの長押しで出るメニュー |
 | バイパス、初期化、ランダム、全ケーブルを抜く | 録音、音声・MIDI・画面の設定 |
 | 出力の電圧を測り、音が届いているか確かめる | プリセットの保存 |
@@ -193,6 +194,43 @@ Start →「Chat…」か、ツールバーの折りたたみ矢印の左の吹�
 
 チャットが働くのは、RackDroid が画面に出ている間だけです。
 
+### モジュールを作る
+
+「こういうモジュールを作って」と頼むと、Claude が C++ で書き、Nova の中でコンパイルして試し、通ったものをそのまま使えるようにします。アプリの再起動は要りません。
+
+![左はチャットで「make a simple ring modulator module with a mix knob」と頼み、made RingMod と返事が出た画面。右は別の依頼で作った 8 ステップのシーケンサーがパッチに入っている画面](images/README-make.png)
+
+左は英語で頼んだ例です。日本語でも同じです。作ったものは一覧の「MADE」にまとまり、パッチの中では `NovaMade/名前` になります。
+
+- **直す**：「つまみを足して」「もっと滑らかに」と書けば、動かしたまま入れ替わります。ケーブルとつまみの位置は残ります。
+- **戻す**：「前の版に戻して」で戻ります。6 版まで残ります。Undo（⟲）の対象は、パッチへの追加と配線だけです。
+- **止める・消す**：Start →「Made modules…」で、止める、動かす、前の版に戻す、消す、ができます。
+- **やめておく**：チャットの設定の「Making modules」を off にすると、作れなくなります。
+
+#### コードに誤りがあっても大丈夫なように
+
+AI の書くコードには誤りがある、という前提で作っています。
+
+![書く、コードを見る、コンパイル、試運転と進み、だめなら理由と行番号を返して書き直す。合格したら差し替え、動いている間は見張り、落ちたら次の起動で代役が立つ流れの図](images/README-make-how.png)
+
+![左は、誤りが出た Looper だけが赤く止まり、ほかは動き続けている画面。右は、アプリが落ちたあとの起動で CrDtor だけが STOPPED の代役になり、ケーブルが残っている画面](images/README-make-stopped.png)
+
+止まったモジュールは「〇〇が止まった。直して」と書けば、どの行で何が起きたかを Claude が調べて直します。
+
+- 止まるのは、そのモジュールだけです。出力は 0 V になり、パネルに STOPPED と出ます。
+- アプリごと落ちた場合も、次の起動でパッチは開きます。原因のモジュールの場所に、同じつまみとジャックの代役が立ちます。
+- RackDroid を新しい版にしたあと、作り直しが要ることがあります。チャットを開くと自動で作り直します（1 つ約 5 秒）。
+- 防げないもの：音が思ったとおりかどうか（Claude は音を聞けず、電圧と周波数で確かめています）。重いモジュールをいくつも置いたときの音切れ。モジュールが壊したメモリのせいで、あとから別の場所が落ちること（検査のおかげで起きにくいが、ないとは言えない）。
+- 検査は、うっかりの誤りを止めるためのものです。悪意のあるコードを防ぐ壁ではありません。
+
+#### Mac の VCV Rack で使う
+
+Nova をつないで次を実行すると、作ったモジュールのソースを取り出し、Mac 用にコンパイルして VCV Rack に入れます（入れたら Rack を起動し直す）。
+
+```sh
+nova/tools/made-to-mac.py
+```
+
 ### 仕組み
 
 ![Nova の中の RackDroid と、Termux の中の橋渡しと Claude Code がやり取りし、Claude Code だけがインターネット越しに Anthropic とつながる図](images/README-chat-how.png)
@@ -200,7 +238,7 @@ Start →「Chat…」か、ツールバーの折りたたみ矢印の左の吹�
 依頼とパッチの内容は、Claude Code から Anthropic に送られます。費用は、Claude Code にログインした契約（Pro / Max など）の使用枠です。API キーは使いません。
 
 - RackDroid に Claude のログインの機能はなく、Claude Code も同梱していません。Termux に自分で入れ、自分でログインします（[Anthropic の決まり](https://code.claude.com/docs/en/legal-and-compliance)に沿うため）。
-- Claude に渡す道具は、パッチの操作だけです。ファイル、コマンド、Web は使えません。
+- Claude に渡す道具は、パッチの操作と、モジュールのソースを書くことだけです。ファイル、コマンド、Web は使えません。
 - Claude Code は Android を公式の対象にしていません。更新で動かなくなることがあります。
 
 ### 用意（1 回だけ）
@@ -221,7 +259,11 @@ Start →「Chat…」か、ツールバーの折りたたみ矢印の左の吹�
    ```
    allow-external-apps = true
    ```
-5. RackDroid でチャットを開き、Android の許可画面で「ALLOW」を押す。これは、RackDroid が Termux の中でコマンドを実行できるようになる強い権限です。実際に始めるのは橋渡し（`nova_bridge.py`）だけで、やめるときは Android の設定で外せます。
+5. モジュールも作るなら、Termux（Debian の外）にコンパイラを入れる（約 500 MB）。
+   ```sh
+   pkg install clang llvm
+   ```
+6. RackDroid でチャットを開き、Android の許可画面で「ALLOW」を押す。これは、RackDroid が Termux の中でコマンドを実行できるようになる強い権限です。実際に始めるのは橋渡し（`nova_bridge.py`）だけで、やめるときは Android の設定で外せます。
 
 Termux で動く橋渡しの記録は `~/nova-chat/bridge.log` に残ります。RackDroid を閉じると、橋渡しも約 2 分で終わります。
 
@@ -345,7 +387,8 @@ adb install -r app/build/outputs/apk/sideload/release/app-sideload-release.apk
 - 音の遅れは Nova で合計およそ 50 ms です（本家と同じ。Nova が最速のオーディオ経路を許可しないため）。
 - 傾きの向きと効き具合は、いまの設定でいったん確定しています（細かい調整はしていません）。
 - チャットは Nova でだけ確かめています（9〜28 モジュールのパッチ）。答えるまでの時間は、質問で 1〜4 秒、変更で 6〜20 秒でした。声の入力、12 キーの日本語、長い会話、数時間の使用は試していません。チャットは Play 版のビルドには入りません（通信の権限がないため）。
+- チャットでのモジュール作りは、ウェーブフォルダー、シーケンサー、リングモジュレーターなどで確かめました（頼んでから使えるまで 20〜60 秒）。長く使ったときの様子、複雑な音源や物理モデル、作ったモジュールが 10 個を超えたときは試していません。
 - MIDI（USB キーボード、外部機器、Mac の DAW、Bluetooth）は本家の機能のままで、この fork では機材がなく確かめていません。
 - 足した 5 モジュールは、Mac 上の検証（`nova/plugin/test/run.sh`：Plaits の 24 モデルが全部鳴ること、音程が 1 V/oct に合うこと、Peaks のエンベロープ、Blades のフィルター、Beads のグレインとシンセ）と、Nova での録音で確かめています。実機のモジュールとの聴き比べはしていません。元にした BrickRack も v0.1 です。
 - 足した 5 モジュールのうち、ポリフォニックなのは MACRO OSC 2 だけです。
-- 改造の中心は `native/port/{gamepad_*,transport,signal_flow,patch_ops}.cpp` と `app/src/main/java/org/rackdroid/{GamepadMenu,PadList,PadTextDialog,PadKeyboard,ModuleTags,TiltSensor,XyPad,MutableOrigin,ChatPanel,PatchServer,TermuxBridge}.kt`、チャットの橋渡しは `nova/bridge/`、足したモジュールは `nova/plugin/` です。VCV Rack 本体（`third_party/`）には手を入れていません。
+- 改造の中心は `native/port/{gamepad_*,transport,signal_flow,patch_ops,made_modules,module_guard}.cpp` と `app/src/main/java/org/rackdroid/{GamepadMenu,PadList,PadTextDialog,PadKeyboard,ModuleTags,TiltSensor,XyPad,MutableOrigin,ChatPanel,PatchServer,TermuxBridge,MadeModules}.kt`、チャットの橋渡しとコンパイルは `nova/bridge/`、モジュールを書くときの土台は `nova/kit/`、足したモジュールは `nova/plugin/` です。VCV Rack 本体（`third_party/`）には手を入れていません。
