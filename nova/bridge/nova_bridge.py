@@ -21,6 +21,7 @@ import hmac
 import json
 import os
 import queue
+import re
 import secrets
 import signal
 import socket
@@ -31,8 +32,10 @@ import time
 
 CONFIG = os.environ.get("NOVA_CHAT_LINK") or os.path.expanduser("~/.nova-chat-link.json")
 CLAUDE = os.environ.get("NOVA_CLAUDE", "claude")
+# What answers, unless RackDroid's chat says otherwise (START > Chat).
 MODEL = os.environ.get("NOVA_CHAT_MODEL", "opus")
 EFFORT = os.environ.get("NOVA_CHAT_EFFORT", "low")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 WORK = os.path.expanduser("~/.nova-chat")
 
 PROMPT = """\
@@ -77,12 +80,21 @@ Do not say you heard it, and do not explain that you cannot.
 
 # ---- The link to RackDroid ----
 
-class Link:
-    """One connection. `on_message` gets what is not an answer to ask()."""
+class Replaced(Exception):
+    """RackDroid has another bridge, or wants one."""
 
-    def __init__(self, role, on_message=None):
-        with open(CONFIG) as f:
-            conf = json.load(f)
+
+def config():
+    with open(CONFIG) as f:
+        return json.load(f)
+
+
+class Link:
+    """One connection. `on_message` gets what is not an answer to ask().
+    `instance` is the run of RackDroid that this was started by, if one was."""
+
+    def __init__(self, role, on_message=None, instance=None):
+        conf = config()
         token = conf["token"].encode()
         host = os.environ.get("NOVA_CHAT_HOST", "127.0.0.1")
         self.sock = socket.create_connection((host, conf["port"]), timeout=5)
@@ -98,12 +110,19 @@ class Link:
 
         def proof(who):
             return hmac.new(token, f"{who}:{theirs}:{mine}".encode(), hashlib.sha256).hexdigest()
-        self.send({"role": role, "nonce": mine, "proof": proof("client")})
+        me = {"role": role, "nonce": mine, "proof": proof("client")}
+        if instance:
+            me["instance"] = instance
+        self.send(me)
         answer = json.loads(self.file.readline() or "{}")
         if not hmac.compare_digest(answer.get("proof", ""), proof("server")):
             self.sock.close()
             raise ConnectionError("that is not RackDroid, or the token is not its")
+        if answer.get("replaced"):
+            self.sock.close()
+            raise Replaced()
         self.instance = answer.get("instance", "")
+        self.settings = answer.get("settings") or {}
         self.sock.settimeout(None)
         self.closed = threading.Event()
         self.replaced = False
@@ -291,6 +310,12 @@ class Claude:
 
     def __init__(self, link, catalog, session=None):
         os.makedirs(WORK, exist_ok=True)
+        model = str(link.settings.get("model") or MODEL)
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*(\[1m\])?", model):
+            model = MODEL
+        effort = link.settings.get("effort")
+        effort = effort if effort in EFFORTS else EFFORT
+        log(f"starting Claude Code: {model}, effort {effort}" + (", going on" if session else ""))
         config = os.path.join(WORK, "mcp.json")
         with open(config, "w") as f:
             json.dump({"mcpServers": {"nova": {
@@ -304,7 +329,7 @@ class Claude:
         with open(prompt_file, "w") as f:
             f.write(prompt)
         cmd = [CLAUDE, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-               "--include-partial-messages", "--model", MODEL, "--effort", EFFORT,
+               "--include-partial-messages", "--model", model, "--effort", effort,
                "--system-prompt-file", prompt_file, "--setting-sources", "",
                "--strict-mcp-config", "--mcp-config", config, "--tools", "", "--allowedTools", "mcp__nova"]
         if session:
@@ -417,9 +442,18 @@ def run():
     claude = None
     patience = float(os.environ.get("NOVA_CHAT_TIMEOUT", "0"))
     since = time.time()
+    try:
+        mine = config().get("instance")
+    except (OSError, ValueError):
+        mine = None
     while True:
         try:
-            link = Link("bridge", inbox.put)
+            link = Link("bridge", inbox.put, mine)
+        except Replaced:
+            log("RackDroid was started again, and starts its own")
+            if claude:
+                claude.close()
+            return
         except (OSError, ValueError, KeyError) as e:
             if patience and time.time() - since > patience:
                 log("RackDroid has gone; so does this")
@@ -442,18 +476,24 @@ def run():
             link.send({"event": "error", "text": f"Claude Code cannot be started ({e})."})
             return
         link.send({"event": "bridge", "connected": True})
+        changed = False
         while not link.closed.is_set():
             try:
                 m = inbox.get(timeout=1)
             except queue.Empty:
-                continue
+                m = {}
+            if "settings" in m:
+                changed = changed or link.settings != m["settings"]
+                link.settings = m["settings"]
             session = claude.session if claude.talked else session
-            if m.get("new") or not claude.alive():
+            # Another model or effort is another process, with the same
+            # conversation; it waits for the answer being given.
+            if m.get("new") or (changed and not claude.busy) or (m.get("chat") and not claude.alive()):
                 claude.close()
                 session = None if m.get("new") else session
                 remember(link.instance, session)
                 claude = Claude(link, link.ask("catalog").get("text", ""), session)
-                link.send({"event": "bridge", "connected": True})
+                changed = False
             if m.get("stop"):
                 claude.stop()
             if m.get("chat") and claude.busy:

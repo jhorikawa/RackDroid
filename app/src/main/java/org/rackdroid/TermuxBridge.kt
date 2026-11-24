@@ -30,9 +30,10 @@ class TermuxBridge(private val activity: Activity, private val server: PatchServ
 			mkdir -p "${'$'}HOME/nova-chat" && cd "${'$'}HOME/nova-chat" || exit 1
 			IFS= read -r link && printf '%s\n' "${'$'}link" > chat-link.json
 			cat > nova_bridge.py.new && mv nova_bridge.py.new nova_bridge.py
+			: > bridge.log
 			exec proot-distro login debian --bind "${'$'}HOME/nova-chat:/nova-chat" -- \
 				env NOVA_CHAT_LINK=/nova-chat/chat-link.json NOVA_CHAT_TIMEOUT=$PATIENCE \
-				python3 /nova-chat/nova_bridge.py run > bridge.log 2>&1
+				python3 /nova-chat/nova_bridge.py run >> bridge.log 2>&1
 		""".trimIndent()
 
 		const val SETUP = "Claude Code did not answer. In Termux:\n" +

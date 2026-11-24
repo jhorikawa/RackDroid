@@ -33,8 +33,8 @@ import javax.crypto.spec.SecretKeySpec
  *   tools   asks for operations on the patch ({"op": ...}, patch_ops.cpp, and
  *           the two about the module list that are answered here)
  *   bridge  the same, and it is what answers the chat: it is sent
- *           {"chat": text}, {"stop": true} and {"new": true}, and sends
- *           {"event": ...}
+ *           {"chat": text}, {"stop": true}, {"new": true} and
+ *           {"settings": ...}, and sends {"event": ...}
  *   user    somewhere the chat is typed: sends those, and is sent the events
  */
 class PatchServer(
@@ -42,6 +42,8 @@ class PatchServer(
 	/** The module list as JSON (browser_native.cpp). */
 	private val modelsJson: () -> String,
 	private val requestBuild: () -> Unit,
+	/** What the chat is to be answered by: {"model", "effort"}. */
+	private val settings: () -> JSONObject,
 ) {
 	companion object {
 		private const val TAG = "rackdroid.link"
@@ -93,7 +95,8 @@ class PatchServer(
 
 	val bridgeConnected: Boolean get() = clients.any { it.role == "bridge" }
 
-	/** {"chat": text}, {"stop": true} or {"new": true}. False without a bridge. */
+	/** {"chat": text}, {"stop": true}, {"new": true} or {"settings": ...}. False
+	 * without a bridge. */
 	fun toBridge(o: JSONObject): Boolean {
 		val bridge = clients.firstOrNull { it.role == "bridge" } ?: return false
 		Thread { bridge.send(o) }.start()
@@ -101,7 +104,7 @@ class PatchServer(
 	}
 
 	/** How to find and recognise this app, for the bridge. */
-	fun linkJson(): String = JSONObject().put("port", PORT).put("token", String(token)).toString()
+	fun linkJson(): String = JSONObject().put("port", PORT).put("token", String(token)).put("instance", instance).toString()
 
 	/** Takes back the last answer's changes. Not on the UI thread: it waits for
 	 * the render thread. Null when done, else what was wrong. */
@@ -191,8 +194,16 @@ class PatchServer(
 				log("a connection that does not know the token")
 				return
 			}
-			client.role = hello.getString("role")
-			client.send(JSONObject().put("proof", proof("server", nonce, theirs)).put("instance", instance))
+			val role = hello.getString("role")
+			// One that an earlier run of the app started, still looking for it:
+			// it may be older than this app, and this run starts its own.
+			if (role == "bridge" && hello.optString("instance", instance) != instance) {
+				client.send(JSONObject().put("proof", proof("server", nonce, theirs)).put("replaced", true))
+				return
+			}
+			client.role = role
+			client.send(JSONObject().put("proof", proof("server", nonce, theirs)).put("instance", instance)
+				.put("settings", settings()))
 			client.socket.soTimeout = 0
 			log("connected: ${client.role}")
 			// The newest one answers. The other is told, or it would come back

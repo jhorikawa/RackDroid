@@ -1933,7 +1933,7 @@ class MainActivity : NativeActivity() {
 	private val gamepadTools = ArrayList<View>()
 
 	/** Menus for a game controller: START and X, see GamepadMenu.kt. */
-	private val gamepadMenu by lazy {
+	private val gamepadMenu: GamepadMenu by lazy {
 		GamepadMenu(this,
 			getModelsJson = { nativeBrowserModelsJson() },
 			requestBuild = { nativeBrowserRequestBuild() },
@@ -1955,13 +1955,15 @@ class MainActivity : NativeActivity() {
 	}
 
 	/** The chat and what answers it: ChatPanel.kt, PatchServer.kt. */
-	private val patchServer by lazy {
+	private val patchServer: PatchServer by lazy {
 		PatchServer(this,
 			modelsJson = { nativeBrowserModelsJson() },
-			requestBuild = { nativeBrowserRequestBuild() })
+			requestBuild = { nativeBrowserRequestBuild() },
+			settings = { chatSettings.json() })
 	}
-	private val chatPanel by lazy {
-		ChatPanel(this, patchServer, TermuxBridge(this, patchServer),
+	private val chatSettings: ChatSettings by lazy { ChatSettings(novaPrefs) }
+	private val chatPanel: ChatPanel by lazy {
+		ChatPanel(this, patchServer, TermuxBridge(this, patchServer), chatSettings, gamepadMenu,
 			togglePause = { nativeTransportToggle() })
 	}
 

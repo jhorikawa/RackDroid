@@ -37,10 +37,10 @@ import org.json.JSONObject
  * that the patch can be watched as it changes. A finger still reaches the rack;
  * the controller belongs to the panel while it is up, in one of two states.
  *
- *   typing    the D-pad keyboard (PadKeyboard); a touch on the field brings up
- *             Android's own instead, with its Japanese and its microphone
+ *   typing    Android's keyboard, with its Japanese and its microphone; or, if
+ *             that is chosen, one for the D-pad (PadKeyboard)
  *   reading   D-pad up and down scroll, Y stops the answer or takes back the
- *             last one, A goes to typing
+ *             last one, X chooses the model and the effort, A goes to typing
  *
  * B puts the panel away; what is being answered goes on. The conversation lasts
  * as long as the app does.
@@ -49,6 +49,8 @@ class ChatPanel(
 	private val activity: Activity,
 	private val server: PatchServer,
 	private val bridge: TermuxBridge,
+	private val settings: ChatSettings,
+	private val menu: GamepadMenu,
 	private val togglePause: () -> Unit,
 ) {
 	private companion object {
@@ -280,6 +282,51 @@ class ChatPanel(
 		}.start()
 	}
 
+	private fun showSettings() {
+		hideIme()
+		val rows = listOf(
+			PadRow("Model: ${settings.modelName}", note = "What answers"),
+			PadRow("Effort: ${settings.effort}", note = "How long it thinks about each answer"),
+			PadRow("Keyboard: ${if (settings.padKeyboard) "D-pad" else "Android"}", note = "What you type with"))
+		menu.choose("Chat", rows, 0) {
+			when (it) {
+				0 -> showModels()
+				1 -> showEfforts()
+				else -> showKeyboards()
+			}
+		}
+	}
+
+	private fun showKeyboards() {
+		val pad = settings.padKeyboard
+		menu.choose("Keyboard", listOf(
+			menu.choiceRow("Android", !pad, "Touch, with Japanese and the microphone"),
+			menu.choiceRow("D-pad", pad, "Letters and digits, without touching the screen")), if (pad) 1 else 0) {
+			settings.padKeyboard = it == 1
+			go(typing)
+		}
+	}
+
+	private fun showModels() {
+		val all = ChatSettings.MODELS
+		menu.choose("Model", all.map { menu.choiceRow(it.name, it.id == settings.model, it.note) },
+			all.indexOfFirst { it.id == settings.model }) { set(all[it].id, settings.effort) }
+	}
+
+	private fun showEfforts() {
+		val all = ChatSettings.EFFORTS
+		menu.choose("Effort", all.map { menu.choiceRow(it.id, it.id == settings.effort, it.note.ifEmpty { null }) },
+			all.indexOfFirst { it.id == settings.effort }) { set(settings.model, all[it].id) }
+	}
+
+	private fun set(model: String, effort: String) {
+		if (model == settings.model && effort == settings.effort)
+			return
+		settings.set(model, effort)
+		server.toBridge(JSONObject().put("settings", settings.json()))
+		note("From the next message: ${settings.modelName}, effort ${settings.effort}.")
+	}
+
 	private fun newChat() {
 		if (working)
 			return
@@ -367,7 +414,7 @@ class ChatPanel(
 			stopping -> "Stopping…"
 			working && unsent != null -> "Starting Claude Code…"
 			working -> "Working… ${(SystemClock.uptimeMillis() - askedAt) / 1000} s"
-			server.bridgeConnected -> "Ready"
+			server.bridgeConnected -> "${settings.modelName} · ${settings.effort} ▾"
 			startedAt > 0L -> "Starting Claude Code…"
 			else -> "Not connected"
 		}
@@ -375,8 +422,8 @@ class ChatPanel(
 		send.contentDescription = if (working) "Stop" else "Send"
 		help.text = when {
 			typing -> "A type   Y erase   START send   X read   B close"
-			working -> "↑↓ scroll   Y stop   B close, it goes on"
-			else -> "A type   ↑↓ scroll   Y undo the answer   B close"
+			working -> "↑↓ scroll   X model   Y stop   B close, it goes on"
+			else -> "A type   X model   Y undo the answer   B close"
 		}
 	}
 
@@ -384,9 +431,16 @@ class ChatPanel(
 		typing = toTyping
 		if (!showing)
 			return
-		keyboard.visibility = if (typing && !imeShown) View.VISIBLE else View.GONE
+		showPadKeyboard()
+		if (!settings.padKeyboard) {
+			if (typing) showIme() else hideIme()
+		}
 		refreshStatus()
 		toEnd()
+	}
+
+	private fun showPadKeyboard() {
+		keyboard.visibility = if (typing && settings.padKeyboard && !imeShown) View.VISIBLE else View.GONE
 	}
 
 	private fun icon(res: Int, what: String, onClick: () -> Unit) = ImageButton(activity).apply {
@@ -414,6 +468,8 @@ class ChatPanel(
 		status = TextView(context).apply {
 			setTextColor(faint)
 			setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+			setPadding(0, dp(8), 0, dp(8))
+			setOnClickListener { showSettings() }
 		}
 		input = EditText(context).apply {
 			setText(draft)
@@ -495,7 +551,12 @@ class ChatPanel(
 			val shown = ViewCompat.getRootWindowInsets(root)?.isVisible(WindowInsetsCompat.Type.ime()) == true
 			if (shown != imeShown) {
 				imeShown = shown
-				keyboard.visibility = if (typing && !shown) View.VISIBLE else View.GONE
+				// Put away by its own key or a swipe: back to reading. Come up
+				// by a touch on the field: typing.
+				if (!settings.padKeyboard)
+					typing = shown
+				showPadKeyboard()
+				refreshStatus()
 				help.visibility = if (shown) View.GONE else View.VISIBLE
 				toEnd()
 			}
@@ -532,6 +593,9 @@ class ChatPanel(
 		input.requestFocus()
 		connect()
 		go(!working)
+		// Asked for before the window has the focus, it does not come.
+		if (typing && !settings.padKeyboard)
+			input.postDelayed({ if (showing && typing) showIme() }, 250)
 	}
 
 	fun close() {
@@ -549,6 +613,12 @@ class ChatPanel(
 		val end = input.selectionEnd.coerceAtLeast(at)
 		if (end > at) input.text.delete(at, end)
 		else if (at > 0) input.text.delete(Character.offsetByCodePoints(input.text, at, -1), at)
+	}
+
+	private fun showIme() {
+		val w = dialog?.window ?: return
+		input.requestFocus()
+		androidx.core.view.WindowCompat.getInsetsController(w, input).show(WindowInsetsCompat.Type.ime())
 	}
 
 	private fun hideIme() {
@@ -569,21 +639,24 @@ class ChatPanel(
 			false
 		} else pressedHere.remove(code)
 		val held = down && code in pressedHere
+		// With Android's keyboard up, the D-pad moves in the text.
+		if (imeShown && code in KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_CENTER)
+			return false
 		when (code) {
 			KeyEvent.KEYCODE_DPAD_UP -> if (down) {
-				if (typing) keyboard.move(0, -1) else scroll.smoothScrollBy(0, -dp(60))
+				if (typing && settings.padKeyboard) keyboard.move(0, -1) else scroll.smoothScrollBy(0, -dp(60))
 			}
 			KeyEvent.KEYCODE_DPAD_DOWN -> if (down) {
-				if (typing) keyboard.move(0, 1) else scroll.smoothScrollBy(0, dp(60))
+				if (typing && settings.padKeyboard) keyboard.move(0, 1) else scroll.smoothScrollBy(0, dp(60))
 			}
 			KeyEvent.KEYCODE_DPAD_LEFT -> if (down && typing) keyboard.move(-1, 0)
 			KeyEvent.KEYCODE_DPAD_RIGHT -> if (down && typing) keyboard.move(1, 0)
 			KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER -> {
-				if (typing) {
+				if (typing && settings.padKeyboard) {
 					if (first) {
 						if (imeShown) hideIme() else keyboard.press()
 					}
-				} else if (released && !working)
+				} else if (!imeShown && released && !working)
 					go(true)
 			}
 			KeyEvent.KEYCODE_BUTTON_Y -> {
@@ -594,7 +667,9 @@ class ChatPanel(
 					if (working) stopAnswer() else undoLast()
 				}
 			}
-			KeyEvent.KEYCODE_BUTTON_X -> if (released) go(!typing)
+			KeyEvent.KEYCODE_BUTTON_X -> if (released) {
+				if (typing) go(false) else showSettings()
+			}
 			KeyEvent.KEYCODE_BUTTON_B -> if (released) {
 				if (imeShown) hideIme() else close()
 			}

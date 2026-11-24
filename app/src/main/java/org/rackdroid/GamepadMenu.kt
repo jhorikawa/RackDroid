@@ -199,6 +199,16 @@ class GamepadMenu(
 		if (which == ADD_MODULE) showCategories() else showMain()
 	}
 
+	/** A list to choose from, for another window (ChatPanel). */
+	internal fun choose(title: String, rows: List<PadRow>, start: Int, onPick: (Int) -> Unit) {
+		resolveInk()
+		list(title, rows, start, onPick = onPick)
+	}
+
+	/** A row that is the one chosen now, or is not. */
+	internal fun choiceRow(label: String, chosen: Boolean, note: String? = null) =
+		PadRow(label, line(if (chosen) LINE_CHECKED else LINE_BOX), note = note)
+
 	private fun showMain() {
 		val items = listOf<Pair<PadRow, () -> Unit>>(
 			if (paused()) PadRow("Play", res(R.drawable.ic_tb_play)) to { togglePause() }
