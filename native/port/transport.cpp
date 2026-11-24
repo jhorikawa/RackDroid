@@ -20,6 +20,7 @@
 #include <nanovg.h>
 
 #include "cable_park.hpp"
+#include "gamepad_nav.hpp"
 #include "jni_bridge.hpp"
 #include "transport.hpp"
 #include "window_android.hpp"
@@ -115,7 +116,7 @@ struct PausedSign : widget::Widget {
 		static const float ICON = 10.f;
 		float w = ICON + 8.f + tw + 28.f;
 		float h = 26.f;
-		float x = (box.size.x - w) * 0.5f;
+		float x = (box.size.x - gamepadNavPanelWidth() - w) * 0.5f;
 		float y = std::fmax(cableParkTopInset(), 0.f) + 8.f;
 		nvgBeginPath(args.vg);
 		nvgRoundedRect(args.vg, x, y, w, h, h * 0.5f);

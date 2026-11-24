@@ -12,6 +12,7 @@
  * as DPAD keys. Other pads send the D-pad as keys and the triggers as
  * LTRIGGER/RTRIGGER, so both forms are read.
  */
+#include <atomic>
 #include <cmath>
 
 #include <android/input.h>
@@ -29,6 +30,9 @@ namespace rackdroid {
 static bool g_button[PAD_BUTTONS] = {};
 static float g_axis[PAD_AXES] = {};
 static bool g_seen = false;
+// The chat's panel is another window: what comes to it comes from its thread.
+static std::atomic<float> g_panelAxis[PAD_AXES] = {};
+static std::atomic<bool> g_panelButton[PAD_BUTTONS] = {};
 // The D-pad as last read from the HAT axes, kept apart from DPAD keys so one
 // source releasing does not cancel the other.
 static bool g_hat[4] = {};
@@ -147,12 +151,26 @@ int gamepadHandleEvent(AInputEvent* event) {
 
 
 bool gamepadButton(int button) {
-	return button >= 0 && button < PAD_BUTTONS && g_button[button];
+	return button >= 0 && button < PAD_BUTTONS && (g_button[button] || g_panelButton[button].load(std::memory_order_relaxed));
 }
 
 
 float gamepadAxis(int axis) {
-	return axis >= 0 && axis < PAD_AXES ? g_axis[axis] : 0.f;
+	if (axis < 0 || axis >= PAD_AXES)
+		return 0.f;
+	return std::fmax(-1.f, std::fmin(1.f, g_axis[axis] + g_panelAxis[axis].load(std::memory_order_relaxed)));
+}
+
+
+void gamepadPanelAxes(const float axes[PAD_AXES]) {
+	for (int i = 0; i < PAD_AXES; i++)
+		g_panelAxis[i].store(axes[i], std::memory_order_relaxed);
+}
+
+
+void gamepadPanelButton(int button, bool down) {
+	if (button >= 0 && button < PAD_BUTTONS)
+		g_panelButton[button].store(down, std::memory_order_relaxed);
 }
 
 

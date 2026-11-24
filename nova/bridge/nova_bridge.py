@@ -74,6 +74,19 @@ menu: read_menu, then set_menu.
 - Pitch is 1 V per octave with 0 V = C4; gates and triggers are 0 or 10 V; \
 modulation is +-5 V or 0-10 V. Most modulation inputs need their attenuverter \
 knob turned up to do anything.
+- Play mode is the user's: pressed in, the right stick starts and ends it, and then \
+the stick, the tilt of the device and the left stick pressed in (l3, a gate) are \
+voltages for the patch; the touch pad (START > XY pad) is so whenever it is on the \
+screen. Everything else on the controller goes on operating the rack. play_controls \
+gives them as outputs, 0 V at rest and outside play mode. stick and tilt are -10 to \
+10 V (right, up, right edge down and top edge away are positive), the pad 0 to 10 V, \
+the gates 0 or 10 V. That is far too much for most inputs: bring it down with an \
+attenuverter (Fundamental/8vert), or the input's own - for pitch 0.1 is an octave \
+each way; add it to what is there (a mixer that passes CV), and a quantizer keeps it \
+in a scale. Unplug nothing the patch needs: stack or sum, so that it still plays by \
+itself. Make what is asked for playable by hand - one thing on each control, with a \
+range that stays musical from end to end - and say which control does what, and that \
+R3 starts it.
 - The whole of one answer is one step of the user's Undo. If they want it \
 undone, call undo.
 
@@ -92,6 +105,13 @@ screen is four inches. No headings, no lists, no Markdown.
 - Say what you made and one knob worth turning. Say so plainly when something \
 could not be done, did not measure as it should, or changed more than was asked. \
 Do not say you heard it, and do not explain that you cannot.
+- Call a module by the name on its panel, which is the one read_patch and \
+add_modules put first: Liquid Filter (AudibleInstruments/Ripples) is the Liquid \
+Filter. Never by what stands behind the slash or by the Mutable Instruments module \
+it copies (Ripples, Rings, Plaits, ...), even if the user does: that is nowhere on \
+the screen. If the user uses such a name, say once which one it is. Where there are \
+two of a kind, say which: by its place, or what it is connected to. Knobs and jacks \
+by their names too. The numbers of modules are for your tools, not for the user.
 - Nothing before or between tool calls: the user sees the patch change.
 - A question gets an answer, not a change to the patch.
 """
@@ -106,6 +126,10 @@ class Replaced(Exception):
 def config():
     with open(CONFIG) as f:
         return json.load(f)
+
+
+def session_id(text):
+    return text if isinstance(text, str) and re.fullmatch(r"[0-9a-f-]{8,64}", text) else None
 
 
 class Link:
@@ -142,6 +166,7 @@ class Link:
             raise Replaced()
         self.instance = answer.get("instance", "")
         self.settings = answer.get("settings") or {}
+        self.session = session_id(answer.get("session"))
         self.sock.settimeout(None)
         self.closed = threading.Event()
         self.replaced = False
@@ -238,6 +263,7 @@ def choice_list(a):
     return out
 
 
+CONTROLS = ["stick_x", "stick_y", "l3", "tilt_x", "tilt_y", "pad_x", "pad_y", "pad_gate"]
 ACTIONS = ["bypass", "unbypass", "initialize", "randomize", "duplicate", "duplicate_with_cables", "unplug_all"]
 WHERE = ["right_of", "left_of", "below", "above"]
 
@@ -287,6 +313,8 @@ TOOLS = [
     ("open_patch", "Open a saved patch, or a new one if no name is given, in place of the one that is open. Only when the user asks. If that has unsaved changes it is refused until the user has been asked: unsaved is keep (a copy is saved first) or discard.",
      {"name": {"type": "string"}, "unsaved": {"type": "string", "enum": ["keep", "discard"]}}, [], one("open")),
     ("play", "Let the engine run or pause it.", {"on": {"type": "boolean"}}, ["on"], one("play")),
+    ("play_controls", "The controls of the handheld's play mode as voltages, on outputs of a module (Core's MIDI to CV, added or the one that is there): answers which output is which. Connect them as any other.",
+     {"controls": {"type": "array", "items": {"type": "string", "enum": CONTROLS}}, "right_of": MODULE}, ["controls"], one("controls")),
     ("listen", "Watch the outputs for a second and say how far each swings, including what reaches the speaker. Give a module to watch all of its outputs.",
      {"module": MODULE}, [], one("listen")),
     ("undo", "Undo the last answer's changes to the patch.", {}, [], one("undo")),
@@ -605,12 +633,20 @@ class Claude:
                "--include-partial-messages", "--model", model, "--effort", effort,
                "--system-prompt-file", prompt_file, "--setting-sources", "",
                "--strict-mcp-config", "--mcp-config", config, "--tools", "", "--allowedTools", "mcp__nova"]
+        # How long Claude Code keeps conversations, to go on with one from the list
+        # in RackDroid; a month by itself.
+        cmd += ["--settings", json.dumps({"cleanupPeriodDays": 365})]
         if session:
             cmd += ["--resume", session]
         # Whatever started this one must not be mistaken for its parent.
         env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE") and k != "CLAUDE_CODE_ENTRYPOINT"}
         self.link = link
         self.session = session
+        self.resuming = bool(session)
+        self.unsaid = None
+        self.forgotten = False
+        self.closing = False
+        self.started = time.time()
         self.busy = False
         self.stopped = False
         self.talked = False
@@ -633,6 +669,7 @@ class Claude:
         self.stopped = False
         self.asked = time.time()
         self.calls = 0
+        self.unsaid = text
         self._write({"type": "user", "message": {"role": "user", "content": text}})
 
     def stop(self):
@@ -642,6 +679,7 @@ class Claude:
                          "request": {"subtype": "interrupt"}})
 
     def close(self):
+        self.closing = True
         if self.alive():
             self.proc.terminate()
             try:
@@ -668,6 +706,8 @@ class Claude:
             kind = o.get("type")
             if kind == "system" and o.get("subtype") == "init":
                 self.session = o.get("session_id")
+                self.resuming = False
+                self._event(event="session", id=self.session)
             elif kind == "stream_event":
                 e = o.get("event", {})
                 d = e.get("delta", {})
@@ -691,34 +731,22 @@ class Claude:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
                         self._event(event="tool_done", id=block.get("tool_use_id"), ok=not block.get("is_error"))
             elif kind == "result":
+                if self.resuming and o.get("is_error") and (o.get("num_turns") == 0 or "No conversation found" in json.dumps(o)):
+                    # What was said is in RackDroid; what it came to is not here.
+                    break
                 self.busy = False
                 self.talked = True
-                if self.session:
-                    remember(self.link.instance, self.session)
                 seconds = time.time() - self.asked
                 failed = bool(o.get("is_error"))
                 how = "stopped" if self.stopped else "failed" if failed else "done"
                 log(f"{how} after {seconds:.1f} s, {self.calls} tool calls", o.get("result") if how == "failed" else "")
                 self._event(event="done", ok=not failed, stopped=self.stopped, text=o.get("result") or "",
                             seconds=round(seconds, 1), calls=self.calls)
-        if self.busy:
+        if self.resuming and not self.closing:
+            self.forgotten = True
+        elif self.busy:
             self.busy = False
             self._event(event="done", ok=False, text="Claude Code stopped.", seconds=0, calls=self.calls)
-
-
-def remembered(instance):
-    """The conversation of this run of RackDroid, if there was one."""
-    try:
-        with open(os.path.join(WORK, "session.json")) as f:
-            o = json.load(f)
-        return o["session"] if o["instance"] == instance else None
-    except (OSError, ValueError, KeyError):
-        return None
-
-
-def remember(instance, session):
-    with open(os.path.join(WORK, "session.json"), "w") as f:
-        json.dump({"instance": instance, "session": session}, f)
 
 
 def run():
@@ -748,7 +776,7 @@ def run():
             time.sleep(2)
             continue
         log("connected to RackDroid")
-        session = remembered(link.instance)
+        session = link.session
         catalog = link.ask("catalog").get("text", "")
         if claude:
             claude.close()
@@ -762,21 +790,34 @@ def run():
         link.send({"event": "bridge", "connected": True})
         threading.Thread(target=refresh, args=(link,), daemon=True).start()
         changed = False
+        # The numbers of modules are of this run of RackDroid.
+        renumbered = bool(session)
         while not link.closed.is_set():
             try:
-                m = inbox.get(timeout=1)
+                m = inbox.get(timeout=0.5)
             except queue.Empty:
                 m = {}
+            if claude.forgotten:
+                # Claude Code has not got that conversation: without it, then.
+                log("no conversation", session)
+                unsaid = claude.unsaid if claude.busy else None
+                claude.close()
+                session = None
+                link.send({"event": "forgot"})
+                claude = Claude(link, link.ask("catalog").get("text", ""))
+                if unsaid:
+                    claude.say(unsaid)
             if "settings" in m:
                 changed = changed or link.settings != m["settings"]
                 link.settings = m["settings"]
             session = claude.session if claude.talked else session
             # Another model or effort is another process, with the same
             # conversation; it waits for the answer being given.
-            if m.get("new") or (changed and not claude.busy) or (m.get("chat") and not claude.alive()):
+            if m.get("new") or "resume" in m or (changed and not claude.busy) or (m.get("chat") and not claude.alive()):
                 claude.close()
-                session = None if m.get("new") else session
-                remember(link.instance, session)
+                if m.get("new") or "resume" in m:
+                    session = session_id(m.get("resume"))
+                    renumbered = bool(session)
                 claude = Claude(link, link.ask("catalog").get("text", ""), session)
                 changed = False
             if m.get("stop"):
@@ -788,7 +829,9 @@ def run():
                 patch = link.ask("patch")
                 now = patch.get("text") or patch.get("error") or ""
                 try:
-                    claude.say(f"<patch>\n{now}</patch>\n\n{m['chat']}")
+                    note = "(This conversation is from earlier: the numbers of modules are others now.)\n" if renumbered else ""
+                    renumbered = False
+                    claude.say(f"<patch>\n{now}</patch>\n{note}\n{m['chat']}")
                 except OSError:
                     link.send({"event": "done", "ok": False, "text": "Claude Code could not be started.", "seconds": 0, "calls": 0})
         if link.replaced:

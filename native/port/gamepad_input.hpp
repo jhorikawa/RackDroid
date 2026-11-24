@@ -43,8 +43,14 @@ event was a controller's and has been consumed, 0 for everything else (touch,
 mouse, the BACK key), which the caller passes on as before. Render thread. */
 int gamepadHandleEvent(AInputEvent* event);
 
+/** With what the chat's panel passes on while it has the controller. */
 bool gamepadButton(int button);
 float gamepadAxis(int axis);
+
+/** Any thread: the sticks and triggers as the chat's panel sees them (all zero
+when it has no controller), and L3. */
+void gamepadPanelAxes(const float axes[PAD_AXES]);
+void gamepadPanelButton(int button, bool down);
 
 /** True once a controller has sent anything in this session. */
 bool gamepadSeen();

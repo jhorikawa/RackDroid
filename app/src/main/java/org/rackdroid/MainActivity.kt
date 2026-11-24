@@ -1954,6 +1954,7 @@ class MainActivity : NativeActivity() {
 			},
 			focusedModel = { nativeGamepadFocusedModel() },
 			openChat = { chatPanel.toggle() },
+			chatShowing = { chatPanel.showing },
 			made = { o, said ->
 				Thread {
 					val r = org.json.JSONObject(patchServer.made(o))
@@ -1967,13 +1968,18 @@ class MainActivity : NativeActivity() {
 		PatchServer(this,
 			modelsJson = { nativeBrowserModelsJson() },
 			requestBuild = { nativeBrowserRequestBuild() },
-			settings = { chatSettings.json() })
+			settings = { chatSettings.json() },
+			session = { chatSession })
 	}
+	private val chatStore: ChatStore by lazy { ChatStore(File(filesDir, "user/chats"), novaPrefs) }
+	/** The store's, for the server's threads. */
+	@Volatile private var chatSession = ""
 	private val chatSettings: ChatSettings by lazy { ChatSettings(novaPrefs) }
 	private val chatPanel: ChatPanel by lazy {
-		ChatPanel(this, patchServer, TermuxBridge(this, patchServer), chatSettings, gamepadMenu,
+		ChatPanel(this, patchServer, TermuxBridge(this, patchServer), chatSettings, chatStore, gamepadMenu,
 			togglePause = { nativeTransportToggle() },
-			cycleZoom = { nativeGamepadCommand(GamepadMenu.CMD_CYCLE_ZOOM) })
+			command = { nativeGamepadCommand(it) },
+			sessionIs = { chatSession = it })
 	}
 
 	/** The handheld's tilt and a touch pad, as voltages for the patch
@@ -2011,11 +2017,11 @@ class MainActivity : NativeActivity() {
 	}
 
 	/** Called from native (render thread) when START (0) or X (1) is pressed
-	 * on a game controller. */
+	 * on a game controller, or START held (2). */
 	fun showGamepadMenuFromNative(which: Int) {
 		uiHandler.post {
 			try {
-				gamepadMenu.show(which)
+				if (which == GamepadMenu.CHAT) chatPanel.summon() else gamepadMenu.show(which)
 			} catch (t: Throwable) {
 				jlog("showGamepadMenu FAILED: ${android.util.Log.getStackTraceString(t)}")
 			}

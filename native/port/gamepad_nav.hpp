@@ -29,16 +29,16 @@ the controller's module menu is on the new module. */
 void gamepadNavFocusModule(int64_t moduleId);
 
 /** Scrolls until the module can be seen beside the chat's panel, if that is up.
-The focus stays where it is. A touch or a button stops it. */
+The focus stays where it is. A touch or a button stops it; while the user's own
+hands are on the rack it is not begun. */
 void gamepadNavShow(int64_t moduleId);
 
 /** Any thread: this many pixels on the right are covered by the chat's panel, and
 at the bottom by its keyboard. */
 void gamepadNavPanelInset(int rightPx, int bottomPx);
 
-/** Any thread: the left stick, and the triggers (R2 less L2), while the chat's
-panel has the controller. */
-void gamepadNavPanelStick(float panX, float panY, float zoom);
+/** Render thread: how much of the scene on the right that is, in its units. */
+float gamepadNavPanelWidth();
 
 /** What the cables should be told apart for (signal_flow.cpp): the module
 selected, or the module and jack focused. False when there is neither. */

@@ -62,6 +62,7 @@ class GamepadMenu(
 	/** The key of the focused module's model, or "" (gamepad_nav.cpp). */
 	private val focusedModel: () -> String,
 	private val openChat: () -> Unit,
+	private val chatShowing: () -> Boolean,
 	/** An operation on the modules made on this device (MadeModules), off the
 	 * UI thread; what came of it comes back on it. */
 	private val made: (JSONObject, (String) -> Unit) -> Unit,
@@ -69,6 +70,8 @@ class GamepadMenu(
 	companion object {
 		const val MAIN = 0
 		const val ADD_MODULE = 1
+		const val CHAT = 2
+		private const val FOCUS_TAG = "pad-focus"
 
 		/** The category of Mutable Instruments ports. */
 		private const val MUTABLE = "MUTABLE"
@@ -78,6 +81,7 @@ class GamepadMenu(
 		const val CMD_MOVE_MODULE = 2
 		const val CMD_DELETE_MODULE = 3
 		const val CMD_CYCLE_ZOOM = 4
+		const val CMD_PLAY_MODE = 5
 
 		// Icons as SVG path data on a 24 x 24 grid. The filled ones are
 		// Material Design icons (Apache 2.0), the family the toolbar's own
@@ -206,9 +210,10 @@ class GamepadMenu(
 	}
 
 	/** A list to choose from, for another window (ChatPanel). */
-	internal fun choose(title: String, rows: List<PadRow>, start: Int, onPick: (Int) -> Unit) {
+	internal fun choose(title: String, rows: List<PadRow>, start: Int, hint: String? = null,
+			onY: ((Int) -> Unit)? = null, onPick: (Int) -> Unit) {
 		resolveInk()
-		list(title, rows, start, onPick = onPick)
+		list(title, rows, start, hint = hint, onY = onY, onPick = onPick)
 	}
 
 	/** A row that is the one chosen now, or is not. */
@@ -256,7 +261,7 @@ class GamepadMenu(
 		val items = listOf<Pair<PadRow, () -> Unit>>(
 			if (paused()) PadRow("Play", res(R.drawable.ic_tb_play)) to { togglePause() }
 			else PadRow("Pause", res(R.drawable.ic_tb_pause)) to { togglePause() },
-			PadRow("Chat…", line(LINE_CHAT)) to { openChat() },
+			PadRow(if (chatShowing()) "Close the chat" else "Chat…", line(LINE_CHAT), note = "Or hold START") to { openChat() },
 			PadRow("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
 			PadRow("Made modules…", line(LINE_MADE)) to { showMade() },
 			PadRow("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
@@ -475,6 +480,12 @@ class GamepadMenu(
 		setPadding(dp(24), dp(18), dp(24), dp(10))
 		addView(TextView(context).apply {
 			text = title
+			// After a touch, Android spends the first press of the D-pad on
+			// finding something to give the focus to, unless something has it.
+			tag = FOCUS_TAG
+			isFocusable = true
+			isFocusableInTouchMode = true
+			defaultFocusHighlightEnabled = false
 			setTextColor(inkColor)
 			setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
 			setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -574,6 +585,7 @@ class GamepadMenu(
 		dialog.setOnDismissListener { if (open === dialog) open = null }
 		open = dialog
 		dialog.show()
+		dialog.window?.decorView?.findViewWithTag<View>(FOCUS_TAG)?.requestFocus()
 		// One highlight, not two: the list's own selection would sit on
 		// whichever row it last landed on while the cursor moved elsewhere.
 		dialog.listView?.selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)

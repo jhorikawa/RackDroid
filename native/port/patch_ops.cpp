@@ -14,6 +14,7 @@
  *   act      {module, what}                     bypass, unbypass, initialize, randomize,
  *                                               duplicate, duplicate_with_cables, unplug_all
  *   move     {module, where, other}             right_of, left_of, below or above another
+ *   controls {controls, right_of?}              play mode's controls as outputs
  *   listen   {module?}                          what the outputs do for a moment
  *   undo                                        the last turn, if nothing came after it
  *   play     {on}                               not a step of Undo, nor are these:
@@ -37,6 +38,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstring>
 #include <ctime>
 #include <deque>
 #include <map>
@@ -70,6 +72,7 @@
 
 #include <jansson.h>
 
+#include "gamepad_input.hpp"
 #include "gamepad_nav.hpp"
 #include "label_overlay.hpp"
 #include "made_modules.hpp"
@@ -258,7 +261,46 @@ static std::string paramText(engine::ParamQuantity* pq) {
 }
 
 
+/** The controls of play mode, as gamepad_midi.cpp sends them. */
+struct Control {
+	const char* name;
+	int cc;
+	const char* what;
+};
+static const Control CONTROLS[] = {
+	{"stick_x", 2, "right stick left/right, -10..10 V in play mode"},
+	{"stick_y", 3, "right stick down/up, -10..10 V in play mode"},
+	{"l3", 15, "left stick pressed in, a gate in play mode"},
+	{"tilt_x", 21, "tilt left/right, -10..10 V in play mode"},
+	{"tilt_y", 22, "tilt towards/away, -10..10 V in play mode"},
+	{"pad_x", 23, "touch pad left/right, 0..10 V"},
+	{"pad_y", 24, "touch pad down/up, 0..10 V"},
+	{"pad_gate", 25, "a finger on the touch pad, a gate"},
+};
+static const int PAD_DRIVER = -10;
+static const char PAD_DEVICE[] = "Built-in controller";
+static const int CELLS = 16;
+
+
+/** Which CC each output of a MIDI-CC to CV module carries, if it listens to the
+controller; else empty. */
+static std::vector<int> cellsOf(engine::Module* m) {
+	std::vector<int> cells;
+	if (!m || !m->model || m->model->plugin->slug != "Core" || m->model->slug != "MIDICCToCVInterface")
+		return cells;
+	json_t* data = m->dataToJson();
+	json_t* midi = json_object_get(data, "midi");
+	if (json_integer_value(json_object_get(midi, "driver")) == PAD_DRIVER && json_object_get(midi, "deviceName")) {
+		for (int i = 0; i < CELLS; i++)
+			cells.push_back((int) json_integer_value(json_array_get(json_object_get(data, "ccs"), i)));
+	}
+	json_decref(data);
+	return cells;
+}
+
+
 static std::string describe(engine::Module* m, app::ModuleWidget* mw) {
+	std::vector<int> cells = cellsOf(m);
 	const int MAX_LISTED = 96;
 	std::string out;
 	if (m->getNumParams() > 0)
@@ -288,6 +330,12 @@ static std::string describe(engine::Module* m, app::ModuleWidget* mw) {
 			std::string about = info ? info->getDescription() : "";
 			if (!about.empty())
 				lines += " (" + string::trim(about) + ")";
+			if (t == 1 && i < cells.size()) {
+				for (const Control& c : CONTROLS) {
+					if (c.cc == cells[i])
+						lines += std::string(" (") + c.name + ": " + c.what + ")";
+				}
+			}
 			if (port) {
 				bool first = true;
 				for (app::CableWidget* cw : theRack()->getCompleteCablesOnPort(port)) {
@@ -346,6 +394,8 @@ static std::string opPatch() {
 	}
 	if (transportPaused())
 		out += "The engine is paused.\n";
+	if (gamepadPlayMode())
+		out += "Play mode is on.\n";
 	return out;
 }
 
@@ -475,6 +525,112 @@ static std::string opAdd(json_t* req) {
 	group()->push(h);
 	gamepadNavShow(module->id);
 	return "Added " + nameOf(mw) + " (" + modelKey(model) + ")\n" + describe(module, mw);
+}
+
+
+/** Play mode's controls on the outputs of a MIDI-CC to CV module: one that
+listens to the controller already, or a new one. */
+static std::string opControls(json_t* req) {
+	checkLock(1);
+	std::vector<const Control*> wanted;
+	size_t i;
+	json_t* j;
+	json_array_foreach(json_object_get(req, "controls"), i, j) {
+		const char* name = json_string_value(j);
+		const Control* found = NULL;
+		for (const Control& c : CONTROLS) {
+			if (name && !std::strcmp(name, c.name))
+				found = &c;
+		}
+		if (!found)
+			throw OpError{std::string("There is no control \"") + (name ? name : "?") + "\"."};
+		wanted.push_back(found);
+	}
+	if (wanted.empty())
+		throw OpError{"Which controls?"};
+
+	app::ModuleWidget* mw = NULL;
+	for (app::ModuleWidget* o : theRack()->getModules()) {
+		if (!cellsOf(o->module).empty())
+			mw = o;
+	}
+	bool isNew = !mw;
+	if (isNew) {
+		plugin::Model* model = plugin::getModel("Core", "MIDICCToCVInterface");
+		if (!model)
+			throw OpError{"Core's MIDI-CC to CV is not there."};
+		app::ModuleWidget* anchor = json_object_get(req, "right_of") ? moduleArg(req, "right_of") : NULL;
+		engine::Module* module = model->createModule();
+		APP->engine->addModule(module);
+		mw = model->createModuleWidget(module);
+		place(mw, anchor);
+		theRack()->addModule(mw);
+		noteModuleAdded(module->id);
+		g_lastAdded = module->id;
+	}
+
+	json_t* before = mw->toJson();
+	json_t* after = json_deep_copy(before);
+	json_t* data = json_object_get(after, "data");
+	std::vector<int> cells = cellsOf(mw->module);
+	if (isNew) {
+		// The order of the outputs is that of CONTROLS.
+		cells.assign(CELLS, -1);
+		for (size_t k = 0; k < sizeof CONTROLS / sizeof CONTROLS[0]; k++)
+			cells[k] = CONTROLS[k].cc;
+		json_t* midi = json_object();
+		json_object_set_new(midi, "driver", json_integer(PAD_DRIVER));
+		json_object_set_new(midi, "deviceName", json_string(PAD_DEVICE));
+		json_object_set_new(midi, "channel", json_integer(-1));
+		json_object_set_new(data, "midi", midi);
+		json_object_set_new(data, "smooth", json_true());
+	}
+	for (const Control* c : wanted) {
+		if (std::find(cells.begin(), cells.end(), c->cc) != cells.end())
+			continue;
+		// An output that nothing hangs on, and that is not one of the controls.
+		int free = -1;
+		for (int k = CELLS - 1; k >= 0; k--) {
+			bool control = false;
+			for (const Control& other : CONTROLS)
+				control = control || other.cc == cells[k];
+			app::PortWidget* port = mw->getOutput(k);
+			if (!control && port && theRack()->getCompleteCablesOnPort(port).empty())
+				free = k;
+		}
+		if (free < 0) {
+			json_decref(before);
+			json_decref(after);
+			throw OpError{"All outputs of " + nameOf(mw) + " are in use."};
+		}
+		cells[free] = c->cc;
+	}
+	json_t* ccs = json_array();
+	for (int cc : cells)
+		json_array_append_new(ccs, json_integer(cc));
+	json_object_set_new(data, "ccs", ccs);
+	mw->fromJson(after);
+
+	if (isNew) {
+		history::ModuleAdd* h = new history::ModuleAdd;
+		h->setModule(mw);
+		group()->push(h);
+		json_decref(before);
+		json_decref(after);
+	}
+	else if (json_equal(before, after)) {
+		json_decref(before);
+		json_decref(after);
+	}
+	else {
+		history::ModuleChange* h = new history::ModuleChange;
+		h->moduleId = mw->module->id;
+		h->oldModuleJ = before;
+		h->newModuleJ = after;
+		group()->push(h);
+	}
+	gamepadNavShow(mw->module->id);
+	return (isNew ? "Added " : "Already there: ") + nameOf(mw) + " (" + modelKey(mw->model) + ")\n" + describe(mw->module, mw);
 }
 
 
@@ -1241,6 +1397,7 @@ static bool carryOut(const std::shared_ptr<Request>& r, std::string& out) {
 		else if (op == "model") text = opModel(req);
 		else if (op == "add") text = opAdd(req);
 		else if (op == "remove") text = opRemove(req);
+		else if (op == "controls") text = opControls(req);
 		else if (op == "connect") text = opConnect(req);
 		else if (op == "disconnect") text = opDisconnect(req);
 		else if (op == "set") text = opSet(req);
@@ -1343,6 +1500,12 @@ Java_org_rackdroid_ChatPanel_nativeChatInset(JNIEnv*, jobject, jint right, jint 
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_rackdroid_ChatPanel_nativeChatStick(JNIEnv*, jobject, jfloat x, jfloat y, jfloat zoom) {
-	rackdroid::gamepadNavPanelStick(x, y, zoom);
+Java_org_rackdroid_ChatPanel_nativeChatSticks(JNIEnv*, jobject, jfloat lx, jfloat ly, jfloat rx, jfloat ry, jfloat l2, jfloat r2) {
+	const float axes[rackdroid::PAD_AXES] = {lx, ly, rx, ry, l2, r2};
+	rackdroid::gamepadPanelAxes(axes);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_rackdroid_ChatPanel_nativeChatGate(JNIEnv*, jobject, jboolean down) {
+	rackdroid::gamepadPanelButton(rackdroid::PAD_L3, down);
 }

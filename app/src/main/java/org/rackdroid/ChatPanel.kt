@@ -36,18 +36,21 @@ import org.json.JSONObject
 
 /**
  * The chat: a panel along the right edge, with the rack to the left of it so
- * that the patch can be watched as it changes. A finger still reaches the rack;
- * the controller belongs to the panel while it is up, in one of two states.
+ * that the patch can be watched, and played, as it changes. A finger reaches
+ * both. The controller is the rack's, with everything it does there, but while
+ * something is typed or read here:
  *
+ *   rack      the panel's window takes no keys, and RackDroid's own gets them
  *   typing    Android's keyboard, with its Japanese and its microphone; or, if
  *             that is chosen, one for the D-pad (PadKeyboard)
  *   reading   D-pad up and down scroll, Y stops the answer or takes back the
  *             last one, X chooses the model and the effort, A goes to typing
  *
- * In both the left stick and the triggers go on panning and zooming the rack, and
- * SELECT pauses it, or held cycles the zoom, as they do without the panel.
+ * START held goes from the rack to the chat and back; sending goes back as well,
+ * and so does B when there is nothing else for it to leave. The sticks, the
+ * triggers, L3 and R3 are the rack's throughout, as is SELECT.
  *
- * B puts the panel away; what is being answered goes on. The conversation lasts
+ * What is being answered goes on with the panel put away. The conversation lasts
  * as long as the app does.
  */
 class ChatPanel(
@@ -55,9 +58,13 @@ class ChatPanel(
 	private val server: PatchServer,
 	private val bridge: TermuxBridge,
 	private val settings: ChatSettings,
+	private val store: ChatStore,
 	private val menu: GamepadMenu,
 	private val togglePause: () -> Unit,
-	private val cycleZoom: () -> Unit,
+	/** A command for gamepad_nav.cpp. */
+	private val command: (Int) -> Unit,
+	/** The conversation that is gone on with, for whoever connects. */
+	private val sessionIs: (String) -> Unit,
 ) {
 	private companion object {
 		const val WIDTH_DP = 300
@@ -65,13 +72,14 @@ class ChatPanel(
 		const val START_MS = 25000L
 		const val MAX_MESSAGES = 60
 		/** As in gamepad_nav.cpp. */
-		const val SELECT_HOLD_MS = 400L
+		const val HOLD_MS = 400L
 		const val HAT_THRESHOLD = 0.5f
 	}
 
 	private enum class Who { USER, CLAUDE, NOTE }
 
-	private class Message(val who: Who, var text: String) {
+	/** @param kept what was done to the patch, as it was kept (ChatStore) */
+	private class Message(val who: Who, var text: String, private val kept: String = "") {
 		/** What was done to the patch, as it is done. */
 		val added = ArrayList<String>()
 		var removed = 0
@@ -91,6 +99,8 @@ class ChatPanel(
 		var view: TextView? = null
 
 		fun work(): String {
+			if (kept.isNotEmpty())
+				return kept
 			val parts = ArrayList<String>()
 			if (refused > 0) parts.add("$refused attempt${if (refused > 1) "s" else ""} refused")
 			parts.addAll(made)
@@ -130,8 +140,13 @@ class ChatPanel(
 	private lateinit var send: ImageButton
 	private lateinit var keyboard: PadKeyboard
 	private lateinit var help: TextView
+	private lateinit var edge: View
+	/** The controller is the chat's, not the rack's. */
+	private var mine = false
 	private var typing = true
 	private var imeShown = false
+	/** The keyboard is being put away to read, not to go back to the rack. */
+	private var stays = false
 
 	private val ink get() = AppTheme.current.textPrimary
 	private val faint get() = AppTheme.current.textSecondary
@@ -142,10 +157,26 @@ class ChatPanel(
 
 	init {
 		server.onEvent = { o -> ui.post { onEvent(o) } }
+		recall()
+	}
+
+	/** The store's current chat, as it was left. */
+	private fun recall() {
+		messages.clear()
+		for (l in store.current.lines.takeLast(MAX_MESSAGES))
+			messages.add(Message(if (l.who == ChatStore.USER) Who.USER else Who.CLAUDE, l.text, l.work))
+		sessionIs(store.current.session)
 	}
 
 	fun toggle() {
 		if (showing) close() else open()
+	}
+
+	/** START has been held at the rack. */
+	fun summon() {
+		if (!showing) open()
+		else if (mine) toRack()
+		else toChat()
 	}
 
 	/** Termux's permission was answered. */
@@ -243,6 +274,11 @@ class ChatPanel(
 				finish(null)
 			}
 			"error" -> finish(o.optString("text"))
+			"session" -> {
+				store.setSession(o.optString("id"))
+				sessionIs(store.current.session)
+			}
+			"forgot" -> note("Claude Code no longer has this conversation: it goes on without what was said so far.")
 		}
 		refreshStatus()
 	}
@@ -269,6 +305,7 @@ class ChatPanel(
 			"move_modules" -> m.moved += size("moves")
 			"save_patch" -> m.files.add("save")
 			"open_patch" -> m.files.add("open")
+			"play_controls" -> m.files.add("play controls")
 			"revert_module" -> m.made.add("went back to version ${args.optInt("version")} of ${args.optString("id")}")
 			"switch_module" -> m.made.add((if (args.optBoolean("on")) "started " else "stopped ") + args.optString("id"))
 			"remove_made" -> m.made.add("removed ${args.optString("id")}")
@@ -286,6 +323,7 @@ class ChatPanel(
 		if (m != null) {
 			if (problem != null)
 				m.text = (m.text.trim() + "\n" + problem).trim()
+			store.add(ChatStore.CLAUDE, m.text.trim(), m.work())
 			show(m)
 		} else if (problem != null)
 			note(problem)
@@ -297,15 +335,15 @@ class ChatPanel(
 		val text = input.text.toString().trim()
 		if (text.isEmpty() || working)
 			return
-		hideIme()
 		input.setText("")
 		draft = ""
 		append(Message(Who.USER, text))
+		store.add(ChatStore.USER, text, "")
 		val m = Message(Who.CLAUDE, "")
 		answer = m
 		askedAt = SystemClock.uptimeMillis()
 		append(m)
-		go(false)
+		toRack()
 		if (!server.toBridge(JSONObject().put("chat", text))) {
 			unsent = text
 			connect()
@@ -343,17 +381,20 @@ class ChatPanel(
 	}
 
 	private fun showSettings() {
+		stays = mine
 		hideIme()
 		val rows = listOf(
+			PadRow("Chats…", note = "Those so far, to look up or go on with"),
 			PadRow("Model: ${settings.modelName}", note = "What answers"),
 			PadRow("Effort: ${settings.effort}", note = "How long it thinks about each answer"),
 			PadRow("Keyboard: ${if (settings.padKeyboard) "D-pad" else "Android"}", note = "What you type with"),
 			PadRow("Making modules: ${if (settings.making) "on" else "off"}", note = "Writing new ones, compiled and tested in Termux"))
 		menu.choose("Chat", rows, 0) {
 			when (it) {
-				0 -> showModels()
-				1 -> showEfforts()
-				2 -> showKeyboards()
+				0 -> showChats()
+				1 -> showModels()
+				2 -> showEfforts()
+				3 -> showKeyboards()
 				else -> {
 					settings.making = !settings.making
 					server.toBridge(JSONObject().put("settings", settings.json()))
@@ -363,13 +404,59 @@ class ChatPanel(
 		}
 	}
 
+	private fun showChats(start: Int = 0) {
+		val all = store.list()
+		if (all.isEmpty()) {
+			note("There is none yet.")
+			return
+		}
+		val day = java.text.SimpleDateFormat("MMM d  HH:mm", java.util.Locale.US)
+		menu.choose("Chats", all.map {
+			menu.choiceRow(it.title.ifEmpty { "…" }.take(60), it.id == store.current.id,
+				"${day.format(java.util.Date(it.at))}   ·   ${it.lines.size} messages")
+		}, start, hint = "A  open      Y  delete      B  back", onY = { i ->
+			menu.choose("Delete this chat?", listOf(menu.choiceRow("Keep it", false), menu.choiceRow("Delete it", false, all[i].title.take(60))), 0) {
+				if (it == 1) {
+					val open = all[i].id == store.current.id
+					if (open && working)
+						note("It is being answered.")
+					else {
+						store.delete(all[i].id)
+						if (open)
+							go(JSONObject().put("new", true))
+					}
+				}
+				showChats(minOf(i, maxOf(0, store.list().size - 1)))
+			}
+		}) {
+			if (working)
+				note("First the answer that is being given.")
+			else if (all[it].id != store.current.id && store.open(all[it].id))
+				go(JSONObject().put("resume", store.current.session))
+		}
+	}
+
+	/** To another chat: the panel shows it, and the bridge is told. */
+	private fun go(bridge: JSONObject) {
+		recall()
+		if (::list.isInitialized && showing) {
+			list.removeAllViews()
+			messages.forEach { add(it) }
+		}
+		server.toBridge(bridge)
+		greet()
+		refreshStatus()
+		toEnd()
+	}
+
 	private fun showKeyboards() {
 		val pad = settings.padKeyboard
 		menu.choose("Keyboard", listOf(
 			menu.choiceRow("Android", !pad, "Touch, with Japanese and the microphone"),
 			menu.choiceRow("D-pad", pad, "Letters and digits, without touching the screen")), if (pad) 1 else 0) {
 			settings.padKeyboard = it == 1
-			go(typing)
+			if (mine)
+				go(typing)
 		}
 	}
 
@@ -396,12 +483,9 @@ class ChatPanel(
 	private fun newChat() {
 		if (working)
 			return
-		messages.clear()
-		if (::list.isInitialized)
-			list.removeAllViews()
-		server.toBridge(JSONObject().put("new", true))
-		greet()
-		go(true)
+		store.startNew()
+		go(JSONObject().put("new", true))
+		toChat()
 	}
 
 	/* ---- The panel ---- */
@@ -489,26 +573,61 @@ class ChatPanel(
 		send.setImageResource(if (working) R.drawable.ic_tb_close else R.drawable.ic_chat_send)
 		send.contentDescription = if (working) "Stop" else "Send"
 		help.text = when {
-			typing -> "A type   Y erase   START send   X read   B close"
-			working -> "↑↓ scroll   X model   Y stop   B close, it goes on"
-			else -> "A type   X model   Y undo the answer   B close"
-		} + "\nL stick  move the rack   L2 R2  zoom"
+			!mine -> "The controller is at the rack\nhold START  to the chat"
+			typing -> "A type   Y erase   START send   X read   B rack\nthe sticks are the rack's"
+			working -> "↑↓ scroll   X settings   Y stop   B rack\nhold B  close: it goes on"
+			else -> "A type   X settings   Y undo the answer   B rack\nhold B  close"
+		}
+		edge.setBackgroundColor(if (mine) AppTheme.current.accent else Color.TRANSPARENT)
 	}
 
-	private fun go(toTyping: Boolean) {
-		typing = toTyping
+	/** The controller to the rack, the panel staying where it is. */
+	private fun toRack() {
+		mine = false
+		typing = false
+		stays = false
+		stickAtRest()
+		hideIme()
+		dialog?.window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
 		if (!showing)
 			return
 		showPadKeyboard()
+		refreshStatus()
+		toEnd()
+	}
+
+	/** The controller to the chat: to type, or to read if it is answering. */
+	private fun toChat() = go(!working)
+
+	private fun go(toTyping: Boolean) {
+		typing = toTyping
+		mine = true
+		stays = false
+		val w = dialog?.window ?: return
+		val had = input.hasWindowFocus()
+		w.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+		showPadKeyboard()
 		if (!settings.padKeyboard) {
-			if (typing) showIme() else hideIme()
+			if (!typing) {
+				stays = true
+				hideIme()
+			} else if (had)
+				showIme()
+			else
+				// Asked for before the window has the focus, it does not come.
+				showImeSoon()
 		}
 		refreshStatus()
 		toEnd()
 	}
 
+	private fun showImeSoon() {
+		for (ms in longArrayOf(120, 350))
+			input.postDelayed({ if (mine && typing && !imeShown && input.hasWindowFocus()) showIme() }, ms)
+	}
+
 	private fun showPadKeyboard() {
-		keyboard.visibility = if (typing && settings.padKeyboard && !imeShown) View.VISIBLE else View.GONE
+		keyboard.visibility = if (mine && typing && settings.padKeyboard && !imeShown) View.VISIBLE else View.GONE
 	}
 
 	private fun icon(res: Int, what: String, onClick: () -> Unit) = ImageButton(activity).apply {
@@ -563,6 +682,12 @@ class ChatPanel(
 				true
 			}
 			setOnClickListener { go(true) }
+			// A click does not come of the touch that takes the focus.
+			setOnTouchListener { _, e ->
+				if (e.action == MotionEvent.ACTION_UP && !mine)
+					go(true)
+				false
+			}
 		}
 		send = ImageButton(context).apply {
 			imageTintList = android.content.res.ColorStateList.valueOf(AppTheme.current.onAccent)
@@ -598,9 +723,9 @@ class ChatPanel(
 			addView(icon(R.drawable.ic_chat_new, "New chat") { newChat() }, LinearLayout.LayoutParams(dp(38), dp(38)))
 			addView(icon(R.drawable.ic_tb_close, "Close") { close() }, LinearLayout.LayoutParams(dp(38), dp(38)))
 		}
-		val root = LinearLayout(context).apply {
+		edge = View(context)
+		val column = LinearLayout(context).apply {
 			orientation = LinearLayout.VERTICAL
-			setBackgroundColor(AppTheme.withAlpha(AppTheme.current.surface, 96))
 			addView(header)
 			addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 			addView(LinearLayout(context).apply {
@@ -615,6 +740,13 @@ class ChatPanel(
 			})
 			addView(help)
 		}
+		val root = LinearLayout(context).apply {
+			orientation = LinearLayout.HORIZONTAL
+			setBackgroundColor(AppTheme.withAlpha(AppTheme.current.surface, 96))
+			// Lit while the controller is here.
+			addView(edge, LinearLayout.LayoutParams(dp(3), ViewGroup.LayoutParams.MATCH_PARENT))
+			addView(column, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+		}
 		root.viewTreeObserver.addOnGlobalLayoutListener {
 			val insets = ViewCompat.getRootWindowInsets(root)
 			val shown = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
@@ -622,10 +754,14 @@ class ChatPanel(
 				nativeChatInset(dp(WIDTH_DP), if (shown) insets!!.getInsets(WindowInsetsCompat.Type.ime()).bottom else 0)
 			if (shown != imeShown) {
 				imeShown = shown
-				// Put away by its own key or a swipe: back to reading. Come up
-				// by a touch on the field: typing.
-				if (!settings.padKeyboard)
+				// Come up by a touch on the field: typing. Put away by its own key
+				// or a swipe: done with it.
+				if (!settings.padKeyboard && mine) {
 					typing = shown
+					if (!shown && !stays)
+						toRack()
+				}
+				stays = false
 				showPadKeyboard()
 				refreshStatus()
 				help.visibility = if (shown) View.GONE else View.VISIBLE
@@ -655,6 +791,7 @@ class ChatPanel(
 			draft = input.text.toString()
 			dialog = null
 			imeShown = false
+			mine = false
 			stickAtRest()
 			nativeChatInset(0, 0)
 		}
@@ -676,10 +813,7 @@ class ChatPanel(
 		greet()
 		input.requestFocus()
 		connect()
-		go(!working)
-		// Asked for before the window has the focus, it does not come.
-		if (typing && !settings.padKeyboard)
-			input.postDelayed({ if (showing && typing) showIme() }, 250)
+		toChat()
 	}
 
 	fun close() {
@@ -714,7 +848,7 @@ class ChatPanel(
 	private var hatX = 0f
 	private var hatY = 0f
 
-	/** The left stick and the triggers are the rack's, whatever has the keys. */
+	/** The sticks and the triggers are the rack's, whatever has the keys. */
 	private fun stick(ev: MotionEvent) {
 		if (!ev.isFromSource(InputDevice.SOURCE_JOYSTICK) || ev.action != MotionEvent.ACTION_MOVE)
 			return
@@ -722,14 +856,16 @@ class ChatPanel(
 		hatY = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
 		val l2 = maxOf(ev.getAxisValue(MotionEvent.AXIS_BRAKE), ev.getAxisValue(MotionEvent.AXIS_LTRIGGER))
 		val r2 = maxOf(ev.getAxisValue(MotionEvent.AXIS_GAS), ev.getAxisValue(MotionEvent.AXIS_RTRIGGER))
-		nativeChatStick(ev.getAxisValue(MotionEvent.AXIS_X), ev.getAxisValue(MotionEvent.AXIS_Y), r2 - l2)
+		nativeChatSticks(ev.getAxisValue(MotionEvent.AXIS_X), ev.getAxisValue(MotionEvent.AXIS_Y),
+			ev.getAxisValue(MotionEvent.AXIS_Z), ev.getAxisValue(MotionEvent.AXIS_RZ), l2, r2)
 	}
 
 	private fun stickAtRest() {
-		ui.removeCallbacks(selectLong)
+		holds.values.forEach { ui.removeCallbacks(it) }
 		hatX = 0f
 		hatY = 0f
-		nativeChatStick(0f, 0f, 0f)
+		nativeChatSticks(0f, 0f, 0f, 0f, 0f, 0f)
+		nativeChatGate(false)
 	}
 
 	/** The D-pad keys that are held because the left stick is. */
@@ -753,11 +889,33 @@ class ChatPanel(
 		return if (event.action == KeyEvent.ACTION_UP) fromStick.remove(code) else code in fromStick
 	}
 
-	/** SELECT: let go it pauses, held it cycles the zoom. */
-	private var selectHeld = false
-	private val selectLong = Runnable {
-		selectHeld = true
-		cycleZoom()
+	/** Buttons that do one thing let go and another held, and whether the one
+	 * that is down now has been held. */
+	private var heldLong = false
+	private val holds = HashMap<Int, Runnable>()
+
+	private fun tapOrHold(code: Int, first: Boolean, released: Boolean, tap: () -> Unit, hold: () -> Unit) {
+		if (first) {
+			heldLong = false
+			val r = Runnable {
+				heldLong = true
+				hold()
+			}
+			holds[code] = r
+			ui.postDelayed(r, HOLD_MS)
+		} else if (released) {
+			holds.remove(code)?.let { ui.removeCallbacks(it) }
+			if (!heldLong)
+				tap()
+		}
+	}
+
+	private fun leave() {
+		if (imeShown) {
+			stays = true
+			hideIme()
+		} else
+			toRack()
 	}
 
 	/** A release only counts if this window saw the press: see GamepadMenu. */
@@ -805,28 +963,19 @@ class ChatPanel(
 			KeyEvent.KEYCODE_BUTTON_X -> if (released) {
 				if (typing) go(false) else showSettings()
 			}
-			KeyEvent.KEYCODE_BUTTON_B -> if (released) {
-				if (imeShown) hideIme() else close()
-			}
-			KeyEvent.KEYCODE_BUTTON_START -> if (released) {
-				if (typing) ask() else if (!working) go(true)
-			}
-			KeyEvent.KEYCODE_BUTTON_SELECT -> {
-				if (first) {
-					selectHeld = false
-					ui.postDelayed(selectLong, SELECT_HOLD_MS)
-				} else if (released) {
-					ui.removeCallbacks(selectLong)
-					if (!selectHeld)
-						togglePause()
-				}
-			}
+			KeyEvent.KEYCODE_BUTTON_B -> tapOrHold(code, first, released, { leave() }, { close() })
+			KeyEvent.KEYCODE_BUTTON_START -> tapOrHold(code, first, released,
+				{ if (typing) ask() else if (!working) go(true) }, { toRack() })
+			KeyEvent.KEYCODE_BUTTON_SELECT -> tapOrHold(code, first, released,
+				{ togglePause() }, { command(GamepadMenu.CMD_CYCLE_ZOOM) })
+			KeyEvent.KEYCODE_BUTTON_THUMBL -> if (first) nativeChatGate(true) else if (!down) nativeChatGate(false)
+			KeyEvent.KEYCODE_BUTTON_THUMBR -> if (first) command(GamepadMenu.CMD_PLAY_MODE)
 			// They come along with the triggers' axes, which are what is read.
 			KeyEvent.KEYCODE_BUTTON_L2, KeyEvent.KEYCODE_BUTTON_R2 -> {}
 			KeyEvent.KEYCODE_BUTTON_L1 -> if (down) scroll.smoothScrollBy(0, -scroll.height * 3 / 4)
 			KeyEvent.KEYCODE_BUTTON_R1 -> if (down) scroll.smoothScrollBy(0, scroll.height * 3 / 4)
 			KeyEvent.KEYCODE_BACK -> if (released) {
-				if (imeShown) hideIme() else close()
+				if (imeShown) leave() else close()
 			}
 			else -> return false
 		}
@@ -834,5 +983,6 @@ class ChatPanel(
 	}
 
 	private external fun nativeChatInset(right: Int, bottom: Int)
-	private external fun nativeChatStick(x: Float, y: Float, zoom: Float)
+	private external fun nativeChatSticks(lx: Float, ly: Float, rx: Float, ry: Float, l2: Float, r2: Float)
+	private external fun nativeChatGate(down: Boolean)
 }

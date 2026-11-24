@@ -29,8 +29,10 @@
  *   X            add a module; it arrives ready to be moved: left/right change
  *                places with the neighbour, up/down change row, A sets it
  *                down, B puts it back
- *   START        main menu (GamepadMenu.kt): the Rack menus, undo/redo, the
- *                toolbar's tools, the focused module's own menu
+ *   START        tapped: main menu (GamepadMenu.kt): the Rack menus, undo/redo,
+ *                the toolbar's tools, the focused module's own menu
+ *                held: to the chat (ChatPanel.kt), which is beside the rack
+ *                and leaves it the controller but for typing and reading
  *
  * With a whole module selected (B from any control on it):
  *
@@ -139,6 +141,8 @@ static bool g_moduleLevel = false;
 /** When SELECT went down, or 0 once it has been acted on: let go it pauses,
 held it cycles the zoom. */
 static double g_selectSince = 0.0;
+/** The same for START: let go it opens the menu, held it goes to the chat. */
+static double g_startSince = 0.0;
 /** When Y went down on a module, or 0: held long enough, it deletes it. */
 static double g_deleteSince = 0.0;
 /** The rack is scrolling after the focus. */
@@ -169,6 +173,7 @@ static const double REPEAT_EDIT = 0.035;
 short enough not to need a question on top of it. */
 static const double DELETE_HOLD = 0.5;
 static const double SELECT_HOLD = 0.4;
+static const double START_HOLD = 0.4;
 static const float STICK_DEADZONE = 0.18f;
 static const float TRIGGER_DEADZONE = 0.08f;
 /** Scene units kept clear around the focused control when scrolling to it. */
@@ -179,7 +184,8 @@ static const float ZOOM_LEVELS[] = {1.f, 2.f, 0.5f};
 
 /** Asked for from GamepadMenu.kt on the UI thread, carried out here on the
 render thread. Matches the constants there. */
-enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1, CMD_MOVE_MODULE = 2, CMD_DELETE_MODULE = 3, CMD_CYCLE_ZOOM = 4 };
+enum GamepadCommand { CMD_NONE = 0, CMD_MODULE_MENU = 1, CMD_MOVE_MODULE = 2, CMD_DELETE_MODULE = 3, CMD_CYCLE_ZOOM = 4,
+	CMD_PLAY_MODE = 5 };
 static std::atomic<int> g_command{CMD_NONE};
 
 /** The focused module's model ("plugin/model"), for the UI thread to ask. */
@@ -391,11 +397,9 @@ static void setFocus(const Focus& f) {
 static std::atomic<int> g_rightInsetPx{0};
 /** What its keyboard covers at the bottom. */
 static std::atomic<int> g_bottomInsetPx{0};
-/** The left stick and the triggers (R2 less L2) while the panel has the
-controller: it passes them on, and nothing else of it. */
-static std::atomic<float> g_panelPanX{0.f};
-static std::atomic<float> g_panelPanY{0.f};
-static std::atomic<float> g_panelZoom{0.f};
+/** When the controller or a finger was last at the rack. */
+static double g_handsAt = -1e9;
+static const double HANDS_SECONDS = 3.0;
 /** The module to be brought into view though nothing has the focus, or -1. */
 static int64_t g_shown = -1;
 
@@ -1060,11 +1064,38 @@ static void pressDirection(int button) {
 }
 
 
+/** 0 the main menu, 1 the module picker, 2 the chat. */
+static void openMenu(int which) {
+	// A module being carried is set down where it is first.
+	if (g_moving)
+		endMove(true);
+	// The menu is another window and takes the keys with it, the release of
+	// the button included. Coming back from it the ring shows: the controller
+	// is plainly in use, and a module added from the menu is where the focus
+	// goes next.
+	if (which != 2)
+		g_active = true;
+	showGamepadMenu(which);
+	gamepadInputReset();
+}
+
+
+static void togglePlayMode() {
+	g_playMode = !g_playMode;
+	g_modeChanged = system::getTime();
+	// The tilt sensor runs only while playing, and takes the pose the device
+	// is held in at this moment as its centre.
+	setTiltWanted(g_playMode);
+	LOGI("play mode %s", g_playMode ? "on" : "off");
+}
+
+
 void gamepadNavButton(int button, bool down) {
 	if (!APP || !APP->scene || !APP->scene->rack)
 		return;
 	windowNoteInteraction();
 	g_shown = -1;
+	g_handsAt = system::getTime();
 	bool isDir = button == PAD_UP || button == PAD_DOWN || button == PAD_LEFT || button == PAD_RIGHT;
 
 	if (!down) {
@@ -1077,6 +1108,10 @@ void gamepadNavButton(int button, bool down) {
 		if (button == PAD_SELECT && g_selectSince > 0.0) {
 			g_selectSince = 0.0;
 			transportToggle();
+		}
+		if (button == PAD_START && g_startSince > 0.0) {
+			g_startSince = 0.0;
+			openMenu(0);
 		}
 		if (button == g_gripHeld) {
 			g_gripHeld = -1;
@@ -1102,29 +1137,19 @@ void gamepadNavButton(int button, bool down) {
 	// Buttons that have nothing to do with the focus work whether or not the
 	// ring is showing, and do not bring it out.
 	if (button == PAD_R3) {
-		g_playMode = !g_playMode;
-		g_modeChanged = system::getTime();
-		// The tilt sensor runs only while playing, and takes the pose the
-		// device is held in at this moment as its centre.
-		setTiltWanted(g_playMode);
-		LOGI("play mode %s", g_playMode ? "on" : "off");
+		togglePlayMode();
 		return;
 	}
 	if (button == PAD_SELECT) {
 		g_selectSince = system::getTime();
 		return;
 	}
-	if (button == PAD_START || button == PAD_X) {
-		// A module being carried is set down where it is first.
-		if (g_moving)
-			endMove(true);
-		// The menu is another window and takes the keys with it, this
-		// button's release included. Coming back from it the ring shows:
-		// the controller is plainly in use, and a module added from the
-		// menu is where the focus goes next.
-		g_active = true;
-		showGamepadMenu(button == PAD_X ? 1 : 0);
-		gamepadInputReset();
+	if (button == PAD_START) {
+		g_startSince = system::getTime();
+		return;
+	}
+	if (button == PAD_X) {
+		openMenu(1);
 		return;
 	}
 
@@ -1220,6 +1245,7 @@ void gamepadNavCancelHeld() {
 	g_dirHeld = -1;
 	g_deleteSince = 0.0;
 	g_selectSince = 0.0;
+	g_startSince = 0.0;
 	g_gripHeld = -1;
 	g_gripUsed = false;
 	g_gripTap = false;
@@ -1244,8 +1270,9 @@ bool gamepadNavCableFocus(CableFocus& out) {
 
 
 void gamepadNavShow(int64_t moduleId) {
-	// With the panel away, the user is at something else.
-	if (g_rightInsetPx.load(std::memory_order_relaxed) > 0)
+	// With the panel away, the user is at something else; with their hands on
+	// the rack, where they are looking is theirs to say.
+	if (g_rightInsetPx.load(std::memory_order_relaxed) > 0 && system::getTime() - g_handsAt > HANDS_SECONDS)
 		g_shown = moduleId;
 }
 
@@ -1256,10 +1283,8 @@ void gamepadNavPanelInset(int rightPx, int bottomPx) {
 }
 
 
-void gamepadNavPanelStick(float panX, float panY, float zoom) {
-	g_panelPanX.store(panX, std::memory_order_relaxed);
-	g_panelPanY.store(panY, std::memory_order_relaxed);
-	g_panelZoom.store(zoom, std::memory_order_relaxed);
+float gamepadNavPanelWidth() {
+	return APP->window ? g_rightInsetPx.load(std::memory_order_relaxed) / APP->window->pixelRatio : 0.f;
 }
 
 
@@ -1299,6 +1324,7 @@ static void openModuleMenu() {
 
 void gamepadNavNoteTouch() {
 	g_shown = -1;
+	g_handsAt = system::getTime();
 	// A finger on the screen sets a carried module down where it is.
 	if (g_moving)
 		endMove(true);
@@ -1346,6 +1372,7 @@ static void turnWithStick(float dt) {
 	if (touchLockMode() >= 2)
 		return;
 	windowNoteInteraction();
+	g_handsAt = system::getTime();
 	float range = pq->getMaxValue() - pq->getMinValue();
 	if (pq->snapEnabled) {
 		// A few steps a second at full tilt however many positions there are:
@@ -1376,19 +1403,18 @@ static void panAndZoom(float dt) {
 	app::RackScrollWidget* rs = APP->scene->rackScroll;
 	if (!rs)
 		return;
-	math::Vec pan(shapeStick(gamepadAxis(PAD_LX) + g_panelPanX.load(std::memory_order_relaxed)),
-		shapeStick(gamepadAxis(PAD_LY) + g_panelPanY.load(std::memory_order_relaxed)));
+	math::Vec pan(shapeStick(gamepadAxis(PAD_LX)), shapeStick(gamepadAxis(PAD_LY)));
 	if (pan.x != 0.f || pan.y != 0.f) {
 		// A screen and a half a second at full tilt, at any zoom.
 		float speed = std::fmax(rs->box.size.x, rs->box.size.y) * 1.5f;
 		rs->offset = rs->offset.plus(pan.mult(speed * dt));
 		g_shown = -1;
+		g_handsAt = system::getTime();
 		g_follow = false;
 		g_viewMoved = true;
 		windowNoteInteraction();
 	}
-	float panel = g_panelZoom.load(std::memory_order_relaxed);
-	float pull = shapeTrigger(gamepadAxis(PAD_R2) + std::fmax(panel, 0.f)) - shapeTrigger(gamepadAxis(PAD_L2) + std::fmax(-panel, 0.f));
+	float pull = shapeTrigger(gamepadAxis(PAD_R2)) - shapeTrigger(gamepadAxis(PAD_L2));
 	if (pull != 0.f) {
 		float zoom = rs->getZoom();
 		// Two octaves end to end (0.5x to 2x) in a little over a second.
@@ -1397,6 +1423,7 @@ static void panAndZoom(float dt) {
 			rs->setZoom(next, zoomPivot(rs));
 			touchNoteZooming();
 			g_shown = -1;
+			g_handsAt = system::getTime();
 			g_follow = false;
 			g_viewMoved = true;
 		}
@@ -1486,6 +1513,10 @@ void gamepadNavStep() {
 		g_selectSince = 0.0;
 		cycleZoom();
 	}
+	if (g_startSince > 0.0 && now - g_startSince >= START_HOLD) {
+		g_startSince = 0.0;
+		openMenu(2);
+	}
 	if (g_deleteSince > 0.0) {
 		windowNoteInteraction();
 		if (now - g_deleteSince >= DELETE_HOLD)
@@ -1509,6 +1540,7 @@ void gamepadNavStep() {
 	switch (g_command.exchange(CMD_NONE)) {
 		case CMD_MODULE_MENU: openModuleMenu(); break;
 		case CMD_CYCLE_ZOOM: cycleZoom(); break;
+		case CMD_PLAY_MODE: togglePlayMode(); break;
 		case CMD_MOVE_MODULE:
 			if (rackWidget()->getModule(g_focus.moduleId)) {
 				g_active = true;
@@ -1662,6 +1694,13 @@ struct GamepadOverlay : widget::Widget {
 		nvgStroke(args.vg);
 	}
 
+	/** The width there is, left of the chat's panel. */
+	float room() {
+		return std::fmax(box.size.x - gamepadNavPanelWidth(), 120.f);
+	}
+
+	static constexpr float HINT_HEIGHT = 17.f;
+
 	void drawStrip(const DrawArgs& args, const std::string& text, NVGcolor accent, float raise = 0.f) {
 		if (text.empty() || !APP->window->uiFont)
 			return;
@@ -1671,10 +1710,17 @@ struct GamepadOverlay : widget::Widget {
 		float bounds[4];
 		nvgTextBounds(args.vg, 0.f, 0.f, text.c_str(), NULL, bounds);
 		float tw = bounds[2] - bounds[0];
-		float w = std::fmin(tw + 28.f, box.size.x - 16.f);
+		// Beside the chat there may not be room for it at its full size.
+		float most = room() - 44.f;
+		if (tw > most) {
+			nvgFontSize(args.vg, std::fmax(15.f * most / tw, 10.5f));
+			nvgTextBounds(args.vg, 0.f, 0.f, text.c_str(), NULL, bounds);
+			tw = bounds[2] - bounds[0];
+		}
+		float w = std::fmin(tw + 28.f, room() - 16.f);
 		float h = 26.f;
-		float x = (box.size.x - w) * 0.5f;
-		float y = box.size.y - BOTTOM_INSET + 4.f - raise;
+		float x = (room() - w) * 0.5f;
+		float y = box.size.y - BOTTOM_INSET + 4.f - raise - hintsRaise;
 		nvgBeginPath(args.vg);
 		nvgRoundedRect(args.vg, x, y, w, h, h * 0.5f);
 		nvgFillColor(args.vg, nvgRGBA(0x1C, 0x18, 0x13, 0xEC));
@@ -1684,41 +1730,72 @@ struct GamepadOverlay : widget::Widget {
 		nvgStroke(args.vg);
 		nvgScissor(args.vg, x + 8.f, y, w - 16.f, h);
 		nvgFillColor(args.vg, nvgRGB(0xF4, 0xEC, 0xDC));
-		nvgText(args.vg, box.size.x * 0.5f, y + h * 0.5f, text.c_str(), NULL);
+		nvgText(args.vg, room() * 0.5f, y + h * 0.5f, text.c_str(), NULL);
 		nvgResetScissor(args.vg);
 	}
 
-	/** The buttons and what they do here, on one line under the strip. Without
-	it there is no finding out what a button does but by pressing it. */
-	void drawHints(const DrawArgs& args) {
-		if (!APP->window->uiFont)
-			return;
-		std::vector<Hint> hints = hintsFor();
+	/** How far the strip stands higher for the lines of hints under it. */
+	float hintsRaise = 0.f;
+	std::vector<std::vector<Hint>> hintLines;
+	std::vector<float> hintWidths;
+
+	static constexpr float HINT_GAP = 4.f;
+	static constexpr float HINT_SEP = 13.f;
+
+	void hintFont(const DrawArgs& args) {
 		nvgFontFaceId(args.vg, APP->window->uiFont->handle);
 		nvgFontSize(args.vg, 11.5f);
 		nvgTextAlign(args.vg, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
-		static const float GAP = 4.f, SEP = 13.f;
-		auto width = [&](const char* t) {
-			float b[4];
-			return nvgTextBounds(args.vg, 0.f, 0.f, t, NULL, b);
-		};
-		float total = -SEP;
-		for (const Hint& h : hints)
-			total += width(h.key) + GAP + width(h.what) + SEP;
-		float h = 17.f;
-		float x = (box.size.x - total) * 0.5f;
-		float y = box.size.y - BOTTOM_INSET + 32.f;
-		nvgBeginPath(args.vg);
-		nvgRoundedRect(args.vg, x - 10.f, y, total + 20.f, h, h * 0.5f);
-		nvgFillColor(args.vg, nvgRGBA(0x1C, 0x18, 0x13, 0xD8));
-		nvgFill(args.vg);
-		for (const Hint& hint : hints) {
-			nvgFillColor(args.vg, RING);
-			nvgText(args.vg, x, y + h * 0.5f, hint.key, NULL);
-			x += width(hint.key) + GAP;
-			nvgFillColor(args.vg, nvgRGB(0xD8, 0xCF, 0xBD));
-			nvgText(args.vg, x, y + h * 0.5f, hint.what, NULL);
-			x += width(hint.what) + SEP;
+	}
+
+	static float widthOf(NVGcontext* vg, const char* t) {
+		return nvgTextBounds(vg, 0.f, 0.f, t, NULL, NULL);
+	}
+
+	/** On one line if there is room, else on as many as it takes. */
+	void layOutHints(const DrawArgs& args) {
+		hintLines.clear();
+		hintWidths.clear();
+		hintsRaise = 0.f;
+		if (!APP->window->uiFont || !(movingModule() || (g_active && widgetOf(g_focus))))
+			return;
+		hintFont(args);
+		for (const Hint& h : hintsFor()) {
+			float w = widthOf(args.vg, h.key) + HINT_GAP + widthOf(args.vg, h.what);
+			if (hintLines.empty() || hintWidths.back() + HINT_SEP + w > room() - 24.f) {
+				hintLines.push_back({h});
+				hintWidths.push_back(w);
+			}
+			else {
+				hintLines.back().push_back(h);
+				hintWidths.back() += HINT_SEP + w;
+			}
+		}
+		hintsRaise = (HINT_HEIGHT + 2.f) * (hintLines.size() - 1);
+	}
+
+	/** The buttons and what they do here, under the strip. Without it there is
+	no finding out what a button does but by pressing it. */
+	void drawHints(const DrawArgs& args) {
+		if (hintLines.empty())
+			return;
+		hintFont(args);
+		for (size_t i = 0; i < hintLines.size(); i++) {
+			float h = HINT_HEIGHT;
+			float x = (room() - hintWidths[i]) * 0.5f;
+			float y = box.size.y - BOTTOM_INSET + 32.f - hintsRaise + (HINT_HEIGHT + 2.f) * i;
+			nvgBeginPath(args.vg);
+			nvgRoundedRect(args.vg, x - 10.f, y, hintWidths[i] + 20.f, h, h * 0.5f);
+			nvgFillColor(args.vg, nvgRGBA(0x1C, 0x18, 0x13, 0xD8));
+			nvgFill(args.vg);
+			for (const Hint& hint : hintLines[i]) {
+				nvgFillColor(args.vg, RING);
+				nvgText(args.vg, x, y + h * 0.5f, hint.key, NULL);
+				x += widthOf(args.vg, hint.key) + HINT_GAP;
+				nvgFillColor(args.vg, nvgRGB(0xD8, 0xCF, 0xBD));
+				nvgText(args.vg, x, y + h * 0.5f, hint.what, NULL);
+				x += widthOf(args.vg, hint.what) + HINT_SEP;
+			}
 		}
 	}
 
@@ -1742,7 +1819,7 @@ struct GamepadOverlay : widget::Widget {
 		nvgTextBounds(args.vg, 0.f, 0.f, text.c_str(), NULL, bounds);
 		float w = bounds[2] - bounds[0] + 20.f;
 		float h = 22.f;
-		float x = box.size.x - w - 10.f;
+		float x = room() - w - 10.f;
 		float y = std::fmax(cableParkTopInset(), 0.f) + 8.f;
 		nvgBeginPath(args.vg);
 		nvgRoundedRect(args.vg, x, y, w, h, h * 0.5f);
@@ -1797,10 +1874,10 @@ struct GamepadOverlay : widget::Widget {
 	}
 
 	void draw(const DrawArgs& args) override {
+		layOutHints(args);
 		drawMode(args);
 		drawFocus(args);
-		if (movingModule() || (g_active && widgetOf(g_focus)))
-			drawHints(args);
+		drawHints(args);
 		if (system::getTime() - g_noticeAt < NOTICE_SECONDS)
 			drawStrip(args, g_notice, nvgRGB(0xF4, 0xEC, 0xDC), 30.f);
 		widget::Widget::draw(args);

@@ -33,8 +33,9 @@ import javax.crypto.spec.SecretKeySpec
  *   tools   asks for operations on the patch ({"op": ...}, patch_ops.cpp, and
  *           the two about the module list that are answered here)
  *   bridge  the same, and it is what answers the chat: it is sent
- *           {"chat": text}, {"stop": true}, {"new": true} and
- *           {"settings": ...}, and sends {"event": ...}
+ *           {"chat": text}, {"stop": true}, {"new": true},
+ *           {"resume": conversation} and {"settings": ...}, and sends
+ *           {"event": ...}
  *   user    somewhere the chat is typed: sends those, and is sent the events
  */
 class PatchServer(
@@ -44,6 +45,8 @@ class PatchServer(
 	private val requestBuild: () -> Unit,
 	/** What the chat is to be answered by: {"model", "effort"}. */
 	private val settings: () -> JSONObject,
+	/** Which conversation of Claude Code's it goes on with, or "". */
+	private val session: () -> String,
 ) {
 	companion object {
 		private const val TAG = "rackdroid.link"
@@ -206,7 +209,7 @@ class PatchServer(
 			}
 			client.role = role
 			client.send(JSONObject().put("proof", proof("server", nonce, theirs)).put("instance", instance)
-				.put("settings", settings()))
+				.put("settings", settings()).put("session", session()))
 			client.socket.soTimeout = 0
 			log("connected: ${client.role}")
 			// The newest one answers. The other is told, or it would come back
