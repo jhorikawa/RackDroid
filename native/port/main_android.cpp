@@ -60,6 +60,7 @@
 #include "gamepad_input.hpp"
 #include "gamepad_midi.hpp"
 #include "gamepad_nav.hpp"
+#include "transport.hpp"
 #include "patch_share.hpp"
 #include "tour_demo.hpp"
 #include "engine_barrier.hpp"
@@ -404,6 +405,7 @@ struct RackDroidApp {
 				rackdroid::installCableParkBar();
 				rackdroid::installSelectionGlow();
 				rackdroid::installGamepadNav();
+				rackdroid::installTransport();
 				patchLaunched = true;
 				LOGI("Patch launched: %s", APP->patch->path.c_str());
 				// Every plugin is registered and the patch is up: Java can now
@@ -3658,6 +3660,9 @@ void android_main(android_app* app) {
 				// runs whether or not anything is on screen. None of these
 				// touch the window or the scene.
 				rackdroid::windowSetPhase(rackdroid::RENDER_TUNE);
+				rackdroid::transportStep(rackdroid::audioPortEpoch());
+				// Nothing about a standing engine is a measurement of it.
+				bool playing = !rackdroid::transportPaused();
 				checkWorkerPriority();
 				if (rackdroid::audioReportSlowCallbacks() > 0)
 					reportEngineThreadCores();
@@ -3669,15 +3674,18 @@ void android_main(android_app* app) {
 				rackdroid::audioReportLatency();
 				// Only once the engine has stopped thrashing about: the
 				// buffer means nothing while the patch is still loading.
-				if (startupSettled())
+				if (playing && startupSettled())
 					rackdroid::audioTrimBuffer();
 				checkAdpfTarget();
 				rackdroid::windowSetAudioStressed(rackdroid::audioUnderrunsRecently());
-				checkThreadCount();
+				if (playing)
+					checkThreadCount();
 				rackdroid::audioApplyBlockChoice();
-				checkBlockSizeOverload();
-				checkBlockSizeStepDown();
-				checkBlockByLoad();
+				if (playing) {
+					checkBlockSizeOverload();
+					checkBlockSizeStepDown();
+					checkBlockByLoad();
+				}
 
 				// The rest needs a surface: input, the scene, a dialog to
 				// show, or a restart the user would not see coming.

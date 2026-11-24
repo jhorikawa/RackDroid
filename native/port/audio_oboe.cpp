@@ -11,6 +11,7 @@
 #include "audio_oboe.hpp"
 #include "window_android.hpp"
 #include "menu_native.hpp"
+#include "transport.hpp"
 
 #include <vector>
 #include <memory>
@@ -1525,6 +1526,22 @@ struct OboeDevice : rack::audio::Device, oboe::AudioStreamDataCallback, oboe::Au
 			return oboe::DataCallbackResult::Continue;
 		}
 
+		// Paused: silence, and the engine left where it is. What the
+		// microphone heard meanwhile is read and dropped, or it would be what
+		// the patch hears from then on, as far behind as the buffer is deep.
+		if (transportHeld()) {
+			std::memset(output, 0, sizeof(float) * numFrames * stream->getChannelCount());
+			callbackSeq.fetch_add(1, std::memory_order_release);
+			if (oboe::AudioStream* in = inputLive.load(std::memory_order_acquire)) {
+				if ((int) inputBuffer.size() < numFrames * NUM_INPUTS)
+					inputBuffer.resize(numFrames * NUM_INPUTS);
+				in->read(inputBuffer.data(), numFrames, 0);
+			}
+			meterLoad = 0.f;
+			g_loadForMeter.store(0, std::memory_order_relaxed);
+			return oboe::DataCallbackResult::Continue;
+		}
+
 		// The callback thread is one of the threads ADPF needs to know about,
 		// and it is the only place its id can be read. Published once per
 		// thread, not once ever: every reopened stream calls back on a new
@@ -1613,6 +1630,7 @@ struct OboeDevice : rack::audio::Device, oboe::AudioStreamDataCallback, oboe::Au
 					seenNs, elapsed, std::memory_order_relaxed))
 				;
 		}
+		transportFade(output, stream->getChannelCount(), numFrames, stream->getSampleRate());
 		gRecorder.push(output, (size_t) numFrames * stream->getChannelCount());
 		// Not sent from here: a report is a call into the system, and this is
 		// the one thread that must not make one. The watchdog thread sends

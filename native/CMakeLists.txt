@@ -423,6 +423,8 @@ if(RACKDROID_UI)
 			${CMAKE_CURRENT_SOURCE_DIR}/port/gamepad_input.cpp
 			${CMAKE_CURRENT_SOURCE_DIR}/port/gamepad_nav.cpp
 			${CMAKE_CURRENT_SOURCE_DIR}/port/gamepad_midi.cpp
+			# Pause and play.
+			${CMAKE_CURRENT_SOURCE_DIR}/port/transport.cpp
 			# rack_engine is a shared lib: the JNI bridge used by its
 			# osdialog backend, clipboard and native menus must live inside it.
 			${CMAKE_CURRENT_SOURCE_DIR}/port/jni_bridge.cpp

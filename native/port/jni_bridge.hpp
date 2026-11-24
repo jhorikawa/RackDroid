@@ -109,6 +109,9 @@ void showGamepadMenu(int which);
 through nativeGamepadTilt in gamepad_midi.cpp. */
 void setTiltWanted(bool on);
 
+/** Tells the interface the engine was paused or plays on (transport.cpp). */
+void notifyPaused(bool paused);
+
 /** Same idea, for the two notices the engine itself can raise: native has
 no Android string resources of its own, so this passes a kind rather than
 text, and Java resolves + localizes it (0 = engine_maxed_out, 1 =

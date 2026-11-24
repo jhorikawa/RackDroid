@@ -24,7 +24,8 @@
  *                held, with the D-pad: carry the focused module (left/right
  *                change places with the neighbour, up/down change row);
  *                letting go sets it down
- *   SELECT       cycle the zoom
+ *   SELECT       tapped: pause / play (transport.cpp)
+ *                held: cycle the zoom
  *   X            add a module; it arrives ready to be moved: left/right change
  *                places with the neighbour, up/down change row, A sets it
  *                down, B puts it back
@@ -82,6 +83,7 @@
 #include "jni_bridge.hpp"
 #include "menu_native.hpp"
 #include "touch_input.hpp"
+#include "transport.hpp"
 #include "window_android.hpp"
 
 #if defined(__ANDROID__)
@@ -133,6 +135,9 @@ static bool g_cabling = false;
 static Focus g_cableFrom;
 /** The focus is on whole modules (FOCUS_MODULE), not on the controls in them. */
 static bool g_moduleLevel = false;
+/** When SELECT went down, or 0 once it has been acted on: let go it pauses,
+held it cycles the zoom. */
+static double g_selectSince = 0.0;
 /** When Y went down on a module, or 0: held long enough, it deletes it. */
 static double g_deleteSince = 0.0;
 /** The rack is scrolling after the focus. */
@@ -162,6 +167,7 @@ static const double REPEAT_EDIT = 0.035;
 /** How long Y is held to delete a module. Long enough to let go of by mistake,
 short enough not to need a question on top of it. */
 static const double DELETE_HOLD = 0.5;
+static const double SELECT_HOLD = 0.4;
 static const float STICK_DEADZONE = 0.18f;
 static const float TRIGGER_DEADZONE = 0.08f;
 /** Scene units kept clear around the focused control when scrolling to it. */
@@ -364,7 +370,7 @@ static void setFocus(const Focus& f) {
 
 
 /** The part of the rack view nothing sits on top of: below the toolbar, above
-the palette and the status strip. Scene units. */
+the palette and the status strip, right of the cable bar. Scene units. */
 static math::Rect clearView() {
 	app::RackScrollWidget* rs = APP->scene->rackScroll;
 	math::Vec o = rs->getAbsoluteOffset(math::Vec(0.f, 0.f));
@@ -372,7 +378,12 @@ static math::Rect clearView() {
 	float bottom = o.y + rs->box.size.y - BOTTOM_INSET;
 	if (bottom < top)
 		top = bottom = (top + bottom) * 0.5f;
-	return math::Rect(o.x, top, rs->box.size.x, bottom - top);
+	// The cable bar stands along the left edge, unless it is folded up.
+	float left = o.x;
+	int bar[4];
+	if (cableParkBoundsPx(bar) && APP->window && bar[3] - bar[1] > 60 * APP->window->pixelRatio)
+		left = std::fmax(left, bar[2] / APP->window->pixelRatio);
+	return math::Rect(left, top, o.x + rs->box.size.x - left, bottom - top);
 }
 
 
@@ -1014,6 +1025,10 @@ void gamepadNavButton(int button, bool down) {
 			releaseMomentary();
 		if (button == PAD_Y)
 			g_deleteSince = 0.0;
+		if (button == PAD_SELECT && g_selectSince > 0.0) {
+			g_selectSince = 0.0;
+			transportToggle();
+		}
 		if (button == g_gripHeld) {
 			g_gripHeld = -1;
 			if (g_gripUsed) {
@@ -1047,7 +1062,7 @@ void gamepadNavButton(int button, bool down) {
 		return;
 	}
 	if (button == PAD_SELECT) {
-		cycleZoom();
+		g_selectSince = system::getTime();
 		return;
 	}
 	if (button == PAD_START || button == PAD_X) {
@@ -1155,6 +1170,7 @@ void gamepadNavCancelHeld() {
 		endMove(true);
 	g_dirHeld = -1;
 	g_deleteSince = 0.0;
+	g_selectSince = 0.0;
 	g_gripHeld = -1;
 	g_gripUsed = false;
 	g_gripTap = false;
@@ -1369,6 +1385,10 @@ void gamepadNavStep() {
 		g_momentary = false;
 		g_histOpen = false;
 	}
+	if (g_selectSince > 0.0 && now - g_selectSince >= SELECT_HOLD) {
+		g_selectSince = 0.0;
+		cycleZoom();
+	}
 	if (g_deleteSince > 0.0) {
 		windowNoteInteraction();
 		if (now - g_deleteSince >= DELETE_HOLD)
@@ -1444,6 +1464,7 @@ struct Hint {
 
 /** What the buttons do where the focus is now. */
 static std::vector<Hint> hintsFor() {
+	const char* pause = transportPaused() ? "play" : "pause";
 	if (movingModule()) {
 		if (g_gripHeld >= 0)
 			return {{"D-pad", "move"}, {"let go", "place"}};
@@ -1452,18 +1473,21 @@ static std::vector<Hint> hintsFor() {
 	if (g_gripHeld >= 0)
 		return {{"D-pad", "move the module"}};
 	if (g_moduleLevel)
-		return {{"A", "open"}, {"A + D-pad", "move"}, {"hold Y", "delete"}, {"X", "add"}, {"B", "hide"}};
+		return {{"A", "open"}, {"A + D-pad", "move"}, {"hold Y", "delete"}, {"X", "add"}, {"B", "hide"},
+			{"SELECT", pause}};
 	if (g_cabling)
 		return {{"D-pad", "choose a jack"}, {"A", "connect"}, {"B", "cancel"}};
 	if (g_editing)
 		return {{"up/down", "coarse"}, {"left/right", "fine"}, {"A", "done"}, {"Y", "reset"}};
 	if (g_focus.kind == FOCUS_MODULE)
-		return {{"A", "pick up"}, {"hold Y", "delete"}, {"B", "module"}, {"X", "add"}, {"START", "menu"}};
+		return {{"A", "pick up"}, {"hold Y", "delete"}, {"B", "module"}, {"X", "add"}, {"SELECT", pause},
+			{"START", "menu"}};
 	if (g_focus.isPort())
-		return {{"A", "cable"}, {"Y", "unplug"}, {"B", "module"}, {"X", "add"}, {"START", "menu"}};
+		return {{"A", "cable"}, {"Y", "unplug"}, {"B", "module"}, {"X", "add"}, {"SELECT", pause},
+			{"START", "menu"}};
 	app::ParamWidget* pw = paramOf(g_focus);
 	return {{"A", pw && isSwitch(pw) ? "press" : "edit"}, {"Y", "reset"}, {"B", "module"}, {"X", "add"},
-		{"START", "menu"}};
+		{"SELECT", pause}, {"START", "menu"}};
 }
 
 

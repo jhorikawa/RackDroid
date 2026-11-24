@@ -64,6 +64,7 @@ static jmethodID midThermalStatus;
 static jmethodID midShowToast;
 static jmethodID midShowGamepadMenu;
 static jmethodID midSetTiltWanted;
+static jmethodID midPausedChanged;
 static jmethodID midShowEngineNotice;
 static jmethodID midRequestAudioFocus;
 
@@ -191,6 +192,9 @@ void jniInit(ANativeActivity* activity) {
 	if (env->ExceptionCheck())
 		env->ExceptionClear();
 	midSetTiltWanted = env->GetMethodID(activityCls, "setTiltWantedFromNative", "(Z)V");
+	if (env->ExceptionCheck())
+		env->ExceptionClear();
+	midPausedChanged = env->GetMethodID(activityCls, "pausedChangedFromNative", "(Z)V");
 	if (env->ExceptionCheck())
 		env->ExceptionClear();
 	midShowEngineNotice = env->GetMethodID(activityCls, "showEngineNoticeFromNative", "(I)V");
@@ -452,6 +456,16 @@ void setTiltWanted(bool on) {
 	env->CallVoidMethod(activityObj, midSetTiltWanted, (jboolean) on);
 	if (env->ExceptionCheck())
 		logAndClearException("setTiltWanted");
+}
+
+
+void notifyPaused(bool paused) {
+	JNIEnv* env = getEnv();
+	if (!env || !midPausedChanged)
+		return;
+	env->CallVoidMethod(activityObj, midPausedChanged, (jboolean) paused);
+	if (env->ExceptionCheck())
+		logAndClearException("notifyPaused");
 }
 
 

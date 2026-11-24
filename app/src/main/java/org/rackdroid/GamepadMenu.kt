@@ -61,6 +61,8 @@ class GamepadMenu(
 	private val tools: () -> List<View>,
 	/** Shows or hides the touch pad (XyPad.kt). */
 	private val toggleXyPad: () -> Unit,
+	private val paused: () -> Boolean,
+	private val togglePause: () -> Unit,
 ) {
 	companion object {
 		const val MAIN = 0
@@ -197,6 +199,8 @@ class GamepadMenu(
 
 	private fun showMain() {
 		val items = listOf<Pair<Row, () -> Unit>>(
+			if (paused()) Row("Play", res(R.drawable.ic_tb_play)) to { togglePause() }
+			else Row("Pause", res(R.drawable.ic_tb_pause)) to { togglePause() },
 			Row("Add module…", res(R.drawable.ic_tb_modules)) to { showCategories() },
 			Row("Move module", fill(FILL_MOVE)) to { command(CMD_MOVE_MODULE) },
 			Row("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },

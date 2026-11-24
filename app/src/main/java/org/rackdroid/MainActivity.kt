@@ -841,7 +841,21 @@ class MainActivity : NativeActivity() {
 		val handleRow = LinearLayout(this).apply {
 			orientation = LinearLayout.HORIZONTAL
 			gravity = Gravity.CENTER_HORIZONTAL
+			// Balanced by an empty cell, so the arrow stays in the middle.
+			addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(64), dp(26)))
 			addView(collapseButton, LinearLayout.LayoutParams(dp(64), dp(26)))
+			addView(ImageButton(this@MainActivity).apply {
+				val isPaused = runCatching { nativeTransportPaused() }.getOrDefault(false)
+				setImageResource(if (isPaused) R.drawable.ic_tb_play else R.drawable.ic_tb_pause)
+				contentDescription = if (isPaused) "Play" else "Pause"
+				imageTintList = android.content.res.ColorStateList.valueOf(AppTheme.current.textPrimary)
+				scaleType = ImageView.ScaleType.FIT_CENTER
+				background = amberRippleRounded()
+				minimumWidth = 0; minimumHeight = 0
+				setPadding(dp(10), dp(4), dp(10), dp(4))
+				setOnClickListener { nativeTransportToggle() }
+				pauseButton = this
+			}, LinearLayout.LayoutParams(dp(64), dp(26)))
 		}
 		toolbarCard = null
 		card = LinearLayout(this).apply {
@@ -1920,7 +1934,9 @@ class MainActivity : NativeActivity() {
 			history = { nativeHistoryAction(it) },
 			command = { nativeGamepadCommand(it) },
 			tools = { gamepadTools },
-			toggleXyPad = { xyPad.toggle() })
+			toggleXyPad = { xyPad.toggle() },
+			paused = { nativeTransportPaused() },
+			togglePause = { nativeTransportToggle() })
 	}
 
 	/** The handheld's tilt and a touch pad, as voltages for the patch
@@ -1941,6 +1957,17 @@ class MainActivity : NativeActivity() {
 			} catch (t: Throwable) {
 				jlog("setTiltWanted FAILED: ${android.util.Log.getStackTraceString(t)}")
 			}
+		}
+	}
+
+	/** Pause and play, beside the toolbar's arrow (transport.cpp). */
+	private var pauseButton: ImageButton? = null
+
+	/** Called from native (render thread) when the engine is paused or plays on. */
+	fun pausedChangedFromNative(paused: Boolean) {
+		uiHandler.post {
+			pauseButton?.setImageResource(if (paused) R.drawable.ic_tb_play else R.drawable.ic_tb_pause)
+			pauseButton?.contentDescription = if (paused) "Play" else "Pause"
 		}
 	}
 
@@ -3075,6 +3102,8 @@ class MainActivity : NativeActivity() {
 	private external fun nativeBackPressed()
 	private external fun nativeToolbarTap(index: Int)
 	private external fun nativeGamepadCommand(command: Int)
+	private external fun nativeTransportToggle()
+	private external fun nativeTransportPaused(): Boolean
 	private external fun nativeGamepadTilt(x: Float, y: Float)
 	private external fun nativeGamepadPad(x: Float, y: Float, down: Boolean)
 	private external fun nativeBrowserModelsJson(): String
