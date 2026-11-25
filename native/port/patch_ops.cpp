@@ -77,6 +77,7 @@
 #include "label_overlay.hpp"
 #include "made_modules.hpp"
 #include "patch_ops.hpp"
+#include "play_claims.hpp"
 #include "touch_input.hpp"
 #include "transport.hpp"
 #include "window_android.hpp"
@@ -282,25 +283,8 @@ static const char PAD_DEVICE[] = "Built-in controller";
 static const int CELLS = 16;
 
 
-/** Which CC each output of a MIDI-CC to CV module carries, if it listens to the
-controller; else empty. */
-static std::vector<int> cellsOf(engine::Module* m) {
-	std::vector<int> cells;
-	if (!m || !m->model || m->model->plugin->slug != "Core" || m->model->slug != "MIDICCToCVInterface")
-		return cells;
-	json_t* data = m->dataToJson();
-	json_t* midi = json_object_get(data, "midi");
-	if (json_integer_value(json_object_get(midi, "driver")) == PAD_DRIVER && json_object_get(midi, "deviceName")) {
-		for (int i = 0; i < CELLS; i++)
-			cells.push_back((int) json_integer_value(json_array_get(json_object_get(data, "ccs"), i)));
-	}
-	json_decref(data);
-	return cells;
-}
-
-
 static std::string describe(engine::Module* m, app::ModuleWidget* mw) {
-	std::vector<int> cells = cellsOf(m);
+	std::vector<int> cells = padCellsOf(m);
 	const int MAX_LISTED = 96;
 	std::string out;
 	if (m->getNumParams() > 0)
@@ -551,7 +535,7 @@ static std::string opControls(json_t* req) {
 
 	app::ModuleWidget* mw = NULL;
 	for (app::ModuleWidget* o : theRack()->getModules()) {
-		if (!cellsOf(o->module).empty())
+		if (!padCellsOf(o->module).empty())
 			mw = o;
 	}
 	bool isNew = !mw;
@@ -572,7 +556,7 @@ static std::string opControls(json_t* req) {
 	json_t* before = mw->toJson();
 	json_t* after = json_deep_copy(before);
 	json_t* data = json_object_get(after, "data");
-	std::vector<int> cells = cellsOf(mw->module);
+	std::vector<int> cells = padCellsOf(mw->module);
 	if (isNew) {
 		// The order of the outputs is that of CONTROLS.
 		cells.assign(CELLS, -1);

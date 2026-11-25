@@ -51,7 +51,12 @@ struct CableFocus {
 bool gamepadNavCableFocus(CableFocus& out);
 
 /** Play mode: the right stick is two voltages for the patch (gamepad_midi.cpp)
-instead of turning the focused knob. R3 toggles it. */
+instead of turning the focused knob, and so is whatever else the patch plays with
+(play_claims.hpp). R3 toggles it. */
 bool gamepadPlayMode();
+
+/** A button that play mode may hand to the patch: not those that are needed to get
+out of it, or at the menus. */
+bool playButton(int button);
 
 } // namespace rackdroid

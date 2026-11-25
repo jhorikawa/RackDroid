@@ -1988,7 +1988,7 @@ class MainActivity : NativeActivity() {
 	private val xyPad by lazy {
 		XyPad(this,
 			bottomClearance = { modulePalette.bounds()?.let { window.decorView.height - it.top } ?: 0 },
-			onPad = { x, y, down -> nativeGamepadPad(x, y, down) })
+			onPad = { x, y, down -> nativeGamepadPad(0, x, y, down) })
 	}
 
 	/** Called from native (render thread) when play mode changes: the tilt
@@ -3153,7 +3153,10 @@ class MainActivity : NativeActivity() {
 	private external fun nativeTransportToggle()
 	private external fun nativeTransportPaused(): Boolean
 	private external fun nativeGamepadTilt(x: Float, y: Float)
-	private external fun nativeGamepadPad(x: Float, y: Float, down: Boolean)
+	private external fun nativeGamepadPad(finger: Int, x: Float, y: Float, down: Boolean)
+	private external fun nativeGamepadMotion(twist: Float, shake: Float, shaken: Boolean)
+	private external fun nativeGamepadDrum(pad: Int, value: Float, down: Boolean)
+	private external fun nativeGamepadFader(fader: Int, value: Float)
 	private external fun nativeBrowserModelsJson(): String
 	private external fun nativeBrowserModelsGeneration(): Long
 	private external fun nativeBrowserChooseAt(key: String, x: Float, y: Float)

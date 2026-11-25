@@ -85,6 +85,7 @@
 #include "gamepad_nav.hpp"
 #include "jni_bridge.hpp"
 #include "menu_native.hpp"
+#include "play_claims.hpp"
 #include "touch_input.hpp"
 #include "transport.hpp"
 #include "window_android.hpp"
@@ -1080,8 +1081,16 @@ static void openMenu(int which) {
 }
 
 
+bool playButton(int button) {
+	return button != PAD_START && button != PAD_SELECT && button != PAD_GUIDE && button != PAD_R3;
+}
+
+
 static void togglePlayMode() {
 	g_playMode = !g_playMode;
+	playClaimsStep(true);
+	// What is held now was pressed for the rack.
+	gamepadNavCancelHeld();
 	g_modeChanged = system::getTime();
 	// The tilt sensor runs only while playing, and takes the pose the device
 	// is held in at this moment as its centre.
@@ -1129,6 +1138,10 @@ void gamepadNavButton(int button, bool down) {
 		}
 		return;
 	}
+
+	// The patch's, in play mode. The stick pressed in (L3) has no use here.
+	if (g_playMode && playButton(button) && playClaimed(6 + button))
+		return;
 
 	// Anything else pressed while Y is held is a change of mind.
 	if (button != PAD_Y)
@@ -1404,6 +1417,17 @@ static void panAndZoom(float dt) {
 	if (!rs)
 		return;
 	math::Vec pan(shapeStick(gamepadAxis(PAD_LX)), shapeStick(gamepadAxis(PAD_LY)));
+	float in = gamepadAxis(PAD_R2);
+	float out = gamepadAxis(PAD_L2);
+	if (g_playMode) {
+		// What the patch plays with does not move the view as well.
+		if (playClaimed(0) || playClaimed(1))
+			pan = math::Vec(0.f, 0.f);
+		if (playClaimed(4))
+			out = 0.f;
+		if (playClaimed(5))
+			in = 0.f;
+	}
 	if (pan.x != 0.f || pan.y != 0.f) {
 		// A screen and a half a second at full tilt, at any zoom.
 		float speed = std::fmax(rs->box.size.x, rs->box.size.y) * 1.5f;
@@ -1414,7 +1438,7 @@ static void panAndZoom(float dt) {
 		g_viewMoved = true;
 		windowNoteInteraction();
 	}
-	float pull = shapeTrigger(gamepadAxis(PAD_R2)) - shapeTrigger(gamepadAxis(PAD_L2));
+	float pull = shapeTrigger(in) - shapeTrigger(out);
 	if (pull != 0.f) {
 		float zoom = rs->getZoom();
 		// Two octaves end to end (0.5x to 2x) in a little over a second.
@@ -1572,6 +1596,7 @@ void gamepadNavStep() {
 		windowNoteInteraction();
 	}
 
+	playClaimsStep();
 	turnWithStick(dt);
 	panAndZoom(dt);
 
@@ -1799,17 +1824,23 @@ struct GamepadOverlay : widget::Widget {
 		}
 	}
 
+	/** What plays, so that nobody wonders why a button does nothing on the rack. */
+	static std::string playText() {
+		std::string used = playClaimsText();
+		return used.empty() ? "PLAY:  nothing in the patch uses the controls" : "PLAY:  " + used;
+	}
+
 	/** Which mode the right stick is in: said in full for a moment after R3,
 	then kept as a small tag for as long as play mode lasts, since a stick that
 	has stopped turning knobs needs explaining. */
 	void drawMode(const DrawArgs& args) {
-		bool fresh = system::getTime() - g_modeChanged < 2.5;
+		bool fresh = system::getTime() - g_modeChanged < (g_playMode ? 5.0 : 2.5);
 		if (!fresh && !g_playMode)
 			return;
 		if (!APP->window->uiFont)
 			return;
 		std::string text = !fresh ? "PLAY"
-			: g_playMode ? "PLAY:  right stick + tilt = CV"
+			: g_playMode ? playText()
 			: "EDIT:  right stick turns the knob";
 		NVGcolor accent = g_playMode ? nvgRGB(0x8D, 0xE0, 0x7A) : RING;
 		nvgFontFaceId(args.vg, APP->window->uiFont->handle);
@@ -1817,6 +1848,11 @@ struct GamepadOverlay : widget::Widget {
 		nvgTextAlign(args.vg, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE);
 		float bounds[4];
 		nvgTextBounds(args.vg, 0.f, 0.f, text.c_str(), NULL, bounds);
+		float most = room() - 60.f;
+		if (bounds[2] - bounds[0] > most) {
+			nvgFontSize(args.vg, std::fmax(13.f * most / (bounds[2] - bounds[0]), 9.f));
+			nvgTextBounds(args.vg, 0.f, 0.f, text.c_str(), NULL, bounds);
+		}
 		float w = bounds[2] - bounds[0] + 20.f;
 		float h = 22.f;
 		float x = room() - w - 10.f;

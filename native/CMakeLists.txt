@@ -423,6 +423,7 @@ if(RACKDROID_UI)
 			${CMAKE_CURRENT_SOURCE_DIR}/port/gamepad_input.cpp
 			${CMAKE_CURRENT_SOURCE_DIR}/port/gamepad_nav.cpp
 			${CMAKE_CURRENT_SOURCE_DIR}/port/gamepad_midi.cpp
+			${CMAKE_CURRENT_SOURCE_DIR}/port/play_claims.cpp
 			# The moving arrows on the cables.
 			${CMAKE_CURRENT_SOURCE_DIR}/port/signal_flow.cpp
 			# Pause and play.
