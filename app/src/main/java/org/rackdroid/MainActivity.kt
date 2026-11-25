@@ -1182,11 +1182,13 @@ class MainActivity : NativeActivity() {
 		pianoView?.releaseAll()
 		xyPad.release()
 		tiltSensor.pause()
+		motionSensor.pause()
 	}
 
 	override fun onResume() {
 		super.onResume()
 		tiltSensor.resume()
+		motionSensor.resume()
 	}
 
 	/** On-device log viewer: tails of user/java-log.txt (UI thread) and Rack's
@@ -1944,7 +1946,7 @@ class MainActivity : NativeActivity() {
 			history = { nativeHistoryAction(it) },
 			command = { nativeGamepadCommand(it) },
 			tools = { gamepadTools },
-			toggleXyPad = { xyPad.toggle() },
+			toggleXyPad = { xyPad.toggle(it) },
 			paused = { nativeTransportPaused() },
 			togglePause = { nativeTransportToggle() },
 			signalFlow = { novaPrefs.getBoolean("signalFlow", true) },
@@ -1985,10 +1987,13 @@ class MainActivity : NativeActivity() {
 	/** The handheld's tilt and a touch pad, as voltages for the patch
 	 * (gamepad_midi.cpp). */
 	private val tiltSensor by lazy { TiltSensor(this) { x, y -> nativeGamepadTilt(x, y) } }
+	private val motionSensor by lazy { MotionSensor(this) { twist, shake, shaken -> nativeGamepadMotion(twist, shake, shaken) } }
 	private val xyPad by lazy {
 		XyPad(this,
 			bottomClearance = { modulePalette.bounds()?.let { window.decorView.height - it.top } ?: 0 },
-			onPad = { x, y, down -> nativeGamepadPad(0, x, y, down) })
+			onPad = { finger, x, y, down -> nativeGamepadPad(finger, x, y, down) },
+			onDrum = { pad, value, down -> nativeGamepadDrum(pad, value, down) },
+			onFader = { fader, value -> nativeGamepadFader(fader, value) })
 	}
 
 	/** Called from native (render thread) when play mode changes: the tilt
@@ -1997,6 +2002,9 @@ class MainActivity : NativeActivity() {
 		uiHandler.post {
 			try {
 				tiltSensor.setWanted(on)
+				val wanted = if (on) nativePlayWanted() else 0
+				motionSensor.setWanted(wanted and 8 != 0)
+				xyPad.play(wanted and 7)
 			} catch (t: Throwable) {
 				jlog("setTiltWanted FAILED: ${android.util.Log.getStackTraceString(t)}")
 			}
@@ -3156,6 +3164,7 @@ class MainActivity : NativeActivity() {
 	private external fun nativeGamepadPad(finger: Int, x: Float, y: Float, down: Boolean)
 	private external fun nativeGamepadMotion(twist: Float, shake: Float, shaken: Boolean)
 	private external fun nativeGamepadDrum(pad: Int, value: Float, down: Boolean)
+	private external fun nativePlayWanted(): Int
 	private external fun nativeGamepadFader(fader: Int, value: Float)
 	private external fun nativeBrowserModelsJson(): String
 	private external fun nativeBrowserModelsGeneration(): Long

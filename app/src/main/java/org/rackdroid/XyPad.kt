@@ -36,7 +36,10 @@ class XyPad(
 	/** Pixels to stay clear of at the bottom of the window: the module
 	 * palette sits there, and a popup shown later does not go over it. */
 	private val bottomClearance: () -> Int,
-	private val onPad: (Float, Float, Boolean) -> Unit,
+	/** finger 0 or 1 */
+	private val onPad: (Int, Float, Float, Boolean) -> Unit,
+	private val onDrum: (Int, Float, Boolean) -> Unit,
+	private val onFader: (Int, Float) -> Unit,
 ) {
 	private var popup: PopupWindow? = null
 
@@ -44,12 +47,40 @@ class XyPad(
 
 	val showing get() = popup != null
 
-	fun toggle() {
-		popup?.let {
+	companion object {
+		const val XY = 1
+		const val DRUMS = 2
+		const val FADERS = 4
+	}
+
+	private var drums: DrumPads? = null
+	/** Put up by play mode, and taken away with it. */
+	private var byPlay = false
+
+	fun toggle(which: Int) {
+		if (popup != null) close() else open(which)
+	}
+
+	/** Play mode came or went, with a patch that uses these. */
+	fun play(which: Int) {
+		if (which != 0 && popup == null) {
+			open(which)
+			byPlay = true
+		} else if (which == 0 && byPlay)
 			close()
-			return
-		}
-		val pad = PadView(activity)
+	}
+
+	/** Side by side, if it is more than one. */
+	private fun open(which: Int) {
+		byPlay = false
+		val pad = android.widget.LinearLayout(activity)
+		fun put(v: View, weight: Float) = pad.addView(v, android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight))
+		if (which and DRUMS != 0)
+			put(DrumPads(activity, onDrum).also { drums = it }, 1.3f)
+		if (which and XY != 0)
+			put(PadView(activity), 1f)
+		if (which and FADERS != 0)
+			put(Faders(activity, onFader), 0.7f)
 		val closeBtn = ImageButton(activity).apply {
 			setImageResource(R.drawable.ic_tb_close)
 			imageTintList = android.content.res.ColorStateList.valueOf(AppTheme.current.textPrimary)
@@ -89,21 +120,29 @@ class XyPad(
 	fun close() {
 		popup?.dismiss()
 		popup = null
+		byPlay = false
 		// A finger still down when the pad goes away never sends its lift.
-		onPad(lastX, lastY, false)
+		lift()
+	}
+
+	private fun lift() {
+		for (f in 0..1)
+			onPad(f, lastX[f], lastY[f], false)
+		drums?.release()
 	}
 
 	/** The app left the screen with a finger possibly still on the pad. */
 	fun release() {
 		if (popup != null)
-			onPad(lastX, lastY, false)
+			lift()
 	}
 
-	private var lastX = 0f
-	private var lastY = 0f
+	private val lastX = FloatArray(2)
+	private val lastY = FloatArray(2)
 
 	private inner class PadView(context: Context) : View(context) {
-		private var down = false
+		/** Which finger is which, by Android's numbers of them, or -1. */
+		private val fingers = intArrayOf(-1, -1)
 		private val ink = AppTheme.current.textPrimary
 		private val accent = AppTheme.current.accent
 		private val fill = Paint().apply { color = AppTheme.withAlpha(AppTheme.current.surface, 92) }
@@ -135,29 +174,53 @@ class XyPad(
 				canvas.drawLine(w * i / 8f, 0f, w * i / 8f, h, grid)
 			for (i in 1 until 4)
 				canvas.drawLine(0f, h * i / 4f, w, h * i / 4f, grid)
-			canvas.drawText("XY PAD   X = left to right   Y = bottom to top   touch = gate", dp(12).toFloat(), dp(20).toFloat(), label)
-			val px = lastX * w
-			val py = (1f - lastY) * h
-			canvas.drawLine(px, 0f, px, h, cross)
-			canvas.drawLine(0f, py, w, py, cross)
-			// Filled while touched, hollow while holding the last position.
-			if (down)
-				canvas.drawCircle(px, py, dp(14).toFloat(), dot)
-			else
-				canvas.drawCircle(px, py, dp(10).toFloat(), ring)
+			canvas.drawText("XY PAD   two fingers", dp(12).toFloat(), dp(20).toFloat(), label)
+			for (f in 0..1) {
+				val down = fingers[f] >= 0
+				// The second only while it is there.
+				if (f == 1 && !down)
+					continue
+				val px = lastX[f] * w
+				val py = (1f - lastY[f]) * h
+				canvas.drawLine(px, 0f, px, h, cross)
+				canvas.drawLine(0f, py, w, py, cross)
+				// Filled while touched, hollow while holding the last position.
+				if (down)
+					canvas.drawCircle(px, py, dp(14).toFloat(), dot)
+				else
+					canvas.drawCircle(px, py, dp(10).toFloat(), ring)
+			}
 		}
 
 		override fun onTouchEvent(event: MotionEvent): Boolean {
+			val index = event.actionIndex
+			val id = event.getPointerId(index)
 			when (event.actionMasked) {
-				MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-					down = true
-					lastX = (event.x / width.coerceAtLeast(1)).coerceIn(0f, 1f)
-					lastY = (1f - event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f)
+				MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+					val f = fingers.indexOf(-1)
+					if (f >= 0)
+						fingers[f] = id
 				}
-				MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> down = false
-				else -> return true
+				MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+					val f = fingers.indexOf(id)
+					if (f >= 0) {
+						fingers[f] = -1
+						onPad(f, lastX[f], lastY[f], false)
+					}
+				}
+				MotionEvent.ACTION_CANCEL -> {
+					fingers.fill(-1)
+					lift()
+				}
 			}
-			onPad(lastX, lastY, down)
+			for (f in 0..1) {
+				val p = if (fingers[f] >= 0) event.findPointerIndex(fingers[f]) else -1
+				if (p < 0)
+					continue
+				lastX[f] = (event.getX(p) / width.coerceAtLeast(1)).coerceIn(0f, 1f)
+				lastY[f] = (1f - event.getY(p) / height.coerceAtLeast(1)).coerceIn(0f, 1f)
+				onPad(f, lastX[f], lastY[f], true)
+			}
 			invalidate()
 			return true
 		}

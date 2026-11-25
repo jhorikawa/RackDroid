@@ -1,5 +1,8 @@
 /* See play_claims.hpp. */
+#include <atomic>
 #include <bitset>
+
+#include <jni.h>
 
 #include <app/CableWidget.hpp>
 #include <app/ModuleWidget.hpp>
@@ -26,6 +29,8 @@ static const double LOOK_SECONDS = 0.25;
 
 static std::bitset<PLAY_CCS> g_claimed;
 static double g_lookedAt = -1e9;
+/** playTouchWanted(), and 8 for the sensors of movement: for the UI thread. */
+static std::atomic<int> g_wanted{0};
 
 
 static bool isModel(engine::Module* m, const char* plugin, const char* model) {
@@ -125,6 +130,7 @@ void playClaimsStep(bool now) {
 		if (mw->module)
 			look(mw);
 	}
+	g_wanted.store(playTouchWanted() | (g_claimed.test(26) || g_claimed.test(27) || g_claimed.test(28) ? 8 : 0));
 }
 
 
@@ -176,3 +182,9 @@ int playTouchWanted() {
 
 
 } // namespace rackdroid
+
+
+extern "C" JNIEXPORT jint JNICALL
+Java_org_rackdroid_MainActivity_nativePlayWanted(JNIEnv*, jobject) {
+	return rackdroid::g_wanted.load();
+}

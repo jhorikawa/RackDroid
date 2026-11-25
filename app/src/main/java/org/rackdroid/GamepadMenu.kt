@@ -53,7 +53,7 @@ class GamepadMenu(
 	/** The toolbar's buttons, in toolbar order. */
 	private val tools: () -> List<View>,
 	/** Shows or hides the touch pad (XyPad.kt). */
-	private val toggleXyPad: () -> Unit,
+	private val toggleXyPad: (Int) -> Unit,
 	private val paused: () -> Boolean,
 	private val togglePause: () -> Unit,
 	/** The moving arrows on the cables (signal_flow.cpp). */
@@ -257,6 +257,14 @@ class GamepadMenu(
 		list(m.name, rows.map { it.first }, onBack = { showMade(at) }) { rows[it].second() }
 	}
 
+	private fun showPads() {
+		val rows = listOf("XY pad" to XyPad.XY, "Drum pads" to XyPad.DRUMS, "Faders" to XyPad.FADERS,
+			"All of them" to (XyPad.XY or XyPad.DRUMS or XyPad.FADERS))
+		list("Touch pads", rows.map { PadRow(it.first, line(LINE_XY)) }, hint = "Chosen again, they go away.", onBack = { showMain() }) {
+			toggleXyPad(rows[it].second)
+		}
+	}
+
 	private fun showMain() {
 		val items = listOf<Pair<PadRow, () -> Unit>>(
 			if (paused()) PadRow("Play", res(R.drawable.ic_tb_play)) to { togglePause() }
@@ -268,7 +276,7 @@ class GamepadMenu(
 			PadRow("Module menu…", fill(FILL_MODULE_MENU)) to { command(CMD_MODULE_MENU) },
 			PadRow("Tags of this module…", line(LINE_TAG)) to { showFocusedTags() },
 			PadRow("Delete module", res(R.drawable.ic_tb_delete)) to { command(CMD_DELETE_MODULE) },
-			PadRow("XY pad", line(LINE_XY)) to { toggleXyPad() },
+			PadRow("Touch pads…", line(LINE_XY), note = "XY, drums, faders") to { showPads() },
 			PadRow(if (signalFlow()) "Signal flow: on" else "Signal flow: off", line(LINE_FLOW)) to { setSignalFlow(!signalFlow()) },
 			PadRow("Undo", res(R.drawable.ic_tb_undo)) to { history(0) },
 			PadRow("Redo", res(R.drawable.ic_tb_redo)) to { history(1) },
