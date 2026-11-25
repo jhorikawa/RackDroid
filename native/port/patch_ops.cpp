@@ -14,7 +14,8 @@
  *   act      {module, what}                     bypass, unbypass, initialize, randomize,
  *                                               duplicate, duplicate_with_cables, unplug_all
  *   move     {module, where, other}             right_of, left_of, below or above another
- *   controls {controls, right_of?}              play mode's controls as outputs
+ *   controls {right_of?}                        Nova Play: play mode's controls as outputs
+ *   assign   {module, slot, control, with, ...} a slot of it
  *   listen   {module?}                          what the outputs do for a moment
  *   undo                                        the last turn, if nothing came after it
  *   play     {on}                               not a step of Undo, nor are these:
@@ -278,9 +279,60 @@ static const Control CONTROLS[] = {
 	{"pad_y", 24, "touch pad down/up, 0..10 V"},
 	{"pad_gate", 25, "a finger on the touch pad, a gate"},
 };
-static const int PAD_DRIVER = -10;
-static const char PAD_DEVICE[] = "Built-in controller";
-static const int CELLS = 16;
+
+
+static bool isPlay(engine::Module* m) {
+	return m && m->model && m->model->slug == "Play" && m->model->plugin->slug == "NovaModular";
+}
+
+
+static const char* const SLOT_MODES[] = {"follow", "stay", "gate", "switch", "trigger"};
+
+
+/** The slots of Nova Play that are in use. */
+static std::string slotsText(engine::Module* m) {
+	if (!isPlay(m) || m->id < 0)
+		return "";
+	json_t* data = m->dataToJson();
+	json_t* outputs = json_object_get(data, "outputs");
+	auto name = [&](json_t* cc) -> std::string {
+		size_t k;
+		json_t* o;
+		json_array_foreach(outputs, k, o) {
+			if (json_integer_value(o) == json_integer_value(cc))
+				return m->getOutputInfo((int) k)->name;
+		}
+		return "";
+	};
+	std::string out;
+	size_t i;
+	json_t* s;
+	json_array_foreach(json_object_get(data, "slots"), i, s) {
+		std::string source = name(json_object_get(s, "source"));
+		if (source.empty())
+			continue;
+		out += string::f("  slot %d: %s", (int) i + 1, source.c_str());
+		size_t k;
+		json_t* w;
+		json_array_foreach(json_object_get(s, "with"), k, w) {
+			std::string with = name(w);
+			if (!with.empty())
+				out += " with " + with + " held";
+		}
+		out += string::f(", %s, %g to %g V", SLOT_MODES[math::clamp((int) json_integer_value(json_object_get(s, "mode")), 0, 4)],
+			json_number_value(json_object_get(s, "lo")), json_number_value(json_object_get(s, "hi")));
+		json_t* t = json_object_get(s, "target");
+		app::ModuleWidget* mw = t ? theRack()->getModule(json_integer_value(json_object_get(t, "moduleId"))) : NULL;
+		if (mw) {
+			engine::ParamQuantity* pq = mw->module->getParamQuantity((int) json_integer_value(json_object_get(t, "paramId")));
+			out += string::f(", moves %s \"%s\" by %g%%", nameOf(mw).c_str(), pq ? pq->getLabel().c_str() : "?",
+				json_number_value(json_object_get(t, "amount")) * 100.0);
+		}
+		out += "\n";
+	}
+	json_decref(data);
+	return out.empty() ? "" : "Slots:\n" + out;
+}
 
 
 static std::string describe(engine::Module* m, app::ModuleWidget* mw) {
@@ -333,6 +385,7 @@ static std::string describe(engine::Module* m, app::ModuleWidget* mw) {
 		if (!lines.empty())
 			out += std::string(t == 0 ? "Inputs:\n" : "Outputs:\n") + lines;
 	}
+	out += slotsText(m);
 	return out.empty() ? "It has no knobs and no jacks.\n" : out;
 }
 
@@ -512,109 +565,88 @@ static std::string opAdd(json_t* req) {
 }
 
 
-/** Play mode's controls on the outputs of a MIDI-CC to CV module: one that
-listens to the controller already, or a new one. */
+/** Nova Play: the one that is there, or a new one. */
 static std::string opControls(json_t* req) {
 	checkLock(1);
-	std::vector<const Control*> wanted;
-	size_t i;
-	json_t* j;
-	json_array_foreach(json_object_get(req, "controls"), i, j) {
-		const char* name = json_string_value(j);
-		const Control* found = NULL;
-		for (const Control& c : CONTROLS) {
-			if (name && !std::strcmp(name, c.name))
-				found = &c;
-		}
-		if (!found)
-			throw OpError{std::string("There is no control \"") + (name ? name : "?") + "\"."};
-		wanted.push_back(found);
-	}
-	if (wanted.empty())
-		throw OpError{"Which controls?"};
-
 	app::ModuleWidget* mw = NULL;
 	for (app::ModuleWidget* o : theRack()->getModules()) {
-		if (!padCellsOf(o->module).empty())
+		if (isPlay(o->module))
 			mw = o;
 	}
-	bool isNew = !mw;
-	if (isNew) {
-		plugin::Model* model = plugin::getModel("Core", "MIDICCToCVInterface");
-		if (!model)
-			throw OpError{"Core's MIDI-CC to CV is not there."};
-		app::ModuleWidget* anchor = json_object_get(req, "right_of") ? moduleArg(req, "right_of") : NULL;
-		engine::Module* module = model->createModule();
-		APP->engine->addModule(module);
-		mw = model->createModuleWidget(module);
-		place(mw, anchor);
-		theRack()->addModule(mw);
-		noteModuleAdded(module->id);
-		g_lastAdded = module->id;
-	}
+	if (mw)
+		return "Already there: " + nameOf(mw) + "\n" + describe(mw->module, mw);
+	json_object_set_new(req, "model", json_string("NovaModular/Play"));
+	return opAdd(req);
+}
 
+
+/** {module, slot, control, with, mode, lo, hi, knob: {module, param, amount}} */
+static std::string opAssign(json_t* req) {
+	checkLock(1);
+	app::ModuleWidget* mw = moduleArg(req, "module");
+	if (!isPlay(mw->module))
+		throw OpError{nameOf(mw) + " is not a Nova Play."};
+	int slot = (int) json_integer_value(json_object_get(req, "slot")) - 1;
 	json_t* before = mw->toJson();
 	json_t* after = json_deep_copy(before);
 	json_t* data = json_object_get(after, "data");
-	std::vector<int> cells = padCellsOf(mw->module);
-	if (isNew) {
-		// The order of the outputs is that of CONTROLS.
-		cells.assign(CELLS, -1);
-		for (size_t k = 0; k < sizeof CONTROLS / sizeof CONTROLS[0]; k++)
-			cells[k] = CONTROLS[k].cc;
-		json_t* midi = json_object();
-		json_object_set_new(midi, "driver", json_integer(PAD_DRIVER));
-		json_object_set_new(midi, "deviceName", json_string(PAD_DEVICE));
-		json_object_set_new(midi, "channel", json_integer(-1));
-		json_object_set_new(data, "midi", midi);
-		json_object_set_new(data, "smooth", json_true());
-	}
-	for (const Control* c : wanted) {
-		if (std::find(cells.begin(), cells.end(), c->cc) != cells.end())
-			continue;
-		// An output that nothing hangs on, and that is not one of the controls.
-		int free = -1;
-		for (int k = CELLS - 1; k >= 0; k--) {
-			bool control = false;
-			for (const Control& other : CONTROLS)
-				control = control || other.cc == cells[k];
-			app::PortWidget* port = mw->getOutput(k);
-			if (!control && port && theRack()->getCompleteCablesOnPort(port).empty())
-				free = k;
+	json_t* s = json_array_get(json_object_get(data, "slots"), slot);
+	json_t* target = NULL;
+	try {
+		if (slot < 0 || !s)
+			throw OpError{"The slots are 1 to 8."};
+		std::vector<std::string> names = portNames(mw->module, engine::Port::OUTPUT);
+		names.resize(json_array_size(json_object_get(data, "outputs")));
+		auto cc = [&](json_t* j) -> json_int_t {
+			if (!j || json_is_null(j))
+				return -1;
+			return json_integer_value(json_array_get(json_object_get(data, "outputs"), pick(j, names, "its controls")));
+		};
+		json_int_t source = cc(json_object_get(req, "control"));
+		json_object_set_new(s, "source", json_integer(source));
+		json_t* with = json_array();
+		json_object_set_new(s, "with", with);
+		for (size_t k = 0; k < 2; k++)
+			json_array_append_new(with, json_integer(cc(json_array_get(json_object_get(req, "with"), k))));
+		const char* mode = json_string_value(json_object_get(req, "mode"));
+		int m = 0;
+		for (int k = 0; k < 5; k++) {
+			if (mode && !std::strcmp(mode, SLOT_MODES[k]))
+				m = k;
 		}
-		if (free < 0) {
-			json_decref(before);
-			json_decref(after);
-			throw OpError{"All outputs of " + nameOf(mw) + " are in use."};
+		json_object_set_new(s, "mode", json_integer(m));
+		bool bipolar = source >= 0 && (source < 4 || source == 21 || source == 22 || source == 26) && m < 2;
+		json_t* lo = json_object_get(req, "lo");
+		json_t* hi = json_object_get(req, "hi");
+		json_object_set_new(s, "lo", json_real(json_is_number(lo) ? json_number_value(lo) : bipolar ? -10.0 : 0.0));
+		json_object_set_new(s, "hi", json_real(json_is_number(hi) ? json_number_value(hi) : 10.0));
+		json_object_del(s, "target");
+		json_t* knob = json_object_get(req, "knob");
+		if (json_is_object(knob)) {
+			app::ModuleWidget* other = moduleArg(knob, "module");
+			int param = pick(json_object_get(knob, "param"), paramNames(other->module), "its knobs");
+			target = json_object();
+			json_object_set_new(target, "moduleId", json_integer(other->module->id));
+			json_object_set_new(target, "paramId", json_integer(param));
+			json_object_set_new(target, "amount", json_real(math::clamp((float) json_number_value(json_object_get(knob, "amount")), -1.f, 1.f)));
+			json_object_set_new(target, "base", json_real(other->module->getParamQuantity(param)->getValue()));
+			json_object_set_new(target, "away", json_false());
+			json_object_set_new(s, "target", target);
 		}
-		cells[free] = c->cc;
 	}
-	json_t* ccs = json_array();
-	for (int cc : cells)
-		json_array_append_new(ccs, json_integer(cc));
-	json_object_set_new(data, "ccs", ccs);
+	catch (...) {
+		json_decref(before);
+		json_decref(after);
+		throw;
+	}
 	mw->fromJson(after);
-
-	if (isNew) {
-		history::ModuleAdd* h = new history::ModuleAdd;
-		h->setModule(mw);
-		group()->push(h);
-		json_decref(before);
-		json_decref(after);
-	}
-	else if (json_equal(before, after)) {
-		json_decref(before);
-		json_decref(after);
-	}
-	else {
-		history::ModuleChange* h = new history::ModuleChange;
-		h->moduleId = mw->module->id;
-		h->oldModuleJ = before;
-		h->newModuleJ = after;
-		group()->push(h);
-	}
+	history::ModuleChange* h = new history::ModuleChange;
+	h->moduleId = mw->module->id;
+	h->oldModuleJ = before;
+	h->newModuleJ = after;
+	group()->push(h);
 	gamepadNavShow(mw->module->id);
-	return (isNew ? "Added " : "Already there: ") + nameOf(mw) + " (" + modelKey(mw->model) + ")\n" + describe(mw->module, mw);
+	return slotsText(mw->module);
 }
 
 
@@ -1382,6 +1414,7 @@ static bool carryOut(const std::shared_ptr<Request>& r, std::string& out) {
 		else if (op == "add") text = opAdd(req);
 		else if (op == "remove") text = opRemove(req);
 		else if (op == "controls") text = opControls(req);
+		else if (op == "assign") text = opAssign(req);
 		else if (op == "connect") text = opConnect(req);
 		else if (op == "disconnect") text = opDisconnect(req);
 		else if (op == "set") text = opSet(req);

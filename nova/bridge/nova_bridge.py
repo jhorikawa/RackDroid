@@ -74,19 +74,23 @@ menu: read_menu, then set_menu.
 - Pitch is 1 V per octave with 0 V = C4; gates and triggers are 0 or 10 V; \
 modulation is +-5 V or 0-10 V. Most modulation inputs need their attenuverter \
 knob turned up to do anything.
-- Play mode is the user's: pressed in, the right stick starts and ends it, and then \
-the stick, the tilt of the device and the left stick pressed in (l3, a gate) are \
-voltages for the patch; the touch pad (START > XY pad) is so whenever it is on the \
-screen. Everything else on the controller goes on operating the rack. play_controls \
-gives them as outputs, 0 V at rest and outside play mode. stick and tilt are -10 to \
-10 V (right, up, right edge down and top edge away are positive), the pad 0 to 10 V, \
-the gates 0 or 10 V. That is far too much for most inputs: bring it down with an \
-attenuverter (Fundamental/8vert), or the input's own - for pitch 0.1 is an octave \
-each way; add it to what is there (a mixer that passes CV), and a quantizer keeps it \
-in a scale. Unplug nothing the patch needs: stack or sum, so that it still plays by \
-itself. Make what is asked for playable by hand - one thing on each control, with a \
-range that stays musical from end to end - and say which control does what, and that \
-R3 starts it.
+- Play mode is the user's: pressed in, the right stick (R3) starts and ends it. Then \
+the patch is played with whatever of the controller it uses, through play_controls: \
+both sticks, L2 and R2, A B X Y, L1 R1, the D-pad, L3 (left stick pressed in), tilt, \
+twist and shake of the device, and on the screen a touch pad for two fingers, eight \
+drum pads and four faders (they come up by themselves in play mode if used). Never \
+START, SELECT and R3. What is not used goes on operating the rack, so do not take more \
+than is asked for, and tell the user when the left stick (moves the view), L2 R2 \
+(zoom), the D-pad or A B X Y (focus and editing) become the patch's while they play.
+- Sticks, tilt and twist are -10 to 10 V with 0 at rest, the others 0 to 10 V. That is \
+far too much for most inputs: bring it down with an attenuverter (Fundamental/8vert), \
+the input's own, or a slot's lo and hi; for pitch 0.1 is an octave each way. Add it to \
+what is there (a mixer that passes CV, or a stacked cable), and a quantizer keeps it in \
+a scale. Unplug nothing the patch needs: it should still play by itself. Combinations \
+(L1 held with a stick, L1 and A) and things that stay or switch are slots, \
+play_assign. A jack is better than a knob; move a knob by a slot where there is none. \
+One thing on each control, with a range that stays musical from end to end; say which \
+does what, and that R3 starts it.
 - The whole of one answer is one step of the user's Undo. If they want it \
 undone, call undo.
 
@@ -263,7 +267,6 @@ def choice_list(a):
     return out
 
 
-CONTROLS = ["stick_x", "stick_y", "l3", "tilt_x", "tilt_y", "pad_x", "pad_y", "pad_gate"]
 ACTIONS = ["bypass", "unbypass", "initialize", "randomize", "duplicate", "duplicate_with_cables", "unplug_all"]
 WHERE = ["right_of", "left_of", "below", "above"]
 
@@ -313,8 +316,15 @@ TOOLS = [
     ("open_patch", "Open a saved patch, or a new one if no name is given, in place of the one that is open. Only when the user asks. If that has unsaved changes it is refused until the user has been asked: unsaved is keep (a copy is saved first) or discard.",
      {"name": {"type": "string"}, "unsaved": {"type": "string", "enum": ["keep", "discard"]}}, [], one("open")),
     ("play", "Let the engine run or pause it.", {"on": {"type": "boolean"}}, ["on"], one("play")),
-    ("play_controls", "The controls of the handheld's play mode as voltages, on outputs of a module (Core's MIDI to CV, added or the one that is there): answers which output is which. Connect them as any other.",
-     {"controls": {"type": "array", "items": {"type": "string", "enum": CONTROLS}}, "right_of": MODULE}, ["controls"], one("controls")),
+    ("play_controls", "Nova Play: the controls of the handheld's play mode as voltages on named jacks, and eight slots. Added, or the one that is there. Connect its outputs as any other.",
+     {"right_of": MODULE}, [], one("controls")),
+    ("play_assign", "Set up a slot of Nova Play: a control of one's own, on the jack \"Slot n\", or moving a knob that has no jack. control and with are outputs' names of Nova Play, as play_controls lists them; with are up to two buttons to be held. mode: follow; stay (with a button held it is set and then stays, without one it is pushed up and down); gate; switch (on and off by turns); trigger. knob moves a knob by amount (-1 to 1) of its range away from where it stands, and back when let go. A control of null clears the slot.",
+     {"module": MODULE, "slot": {"type": "integer"}, "control": {"type": ["string", "null"]},
+      "with": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
+      "mode": {"type": "string", "enum": ["follow", "stay", "gate", "switch", "trigger"]},
+      "lo": {"type": "number"}, "hi": {"type": "number"},
+      "knob": {"type": "object", "properties": {"module": MODULE, "param": JACK, "amount": {"type": "number"}}, "required": ["module", "param", "amount"]}},
+     ["module", "slot", "control"], one("assign")),
     ("listen", "Watch the outputs for a second and say how far each swings, including what reaches the speaker. Give a module to watch all of its outputs.",
      {"module": MODULE}, [], one("listen")),
     ("undo", "Undo the last answer's changes to the patch.", {}, [], one("undo")),
