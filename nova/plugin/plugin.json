@@ -54,6 +54,12 @@
       "description": "Based on Mutable Instruments Blades: two multimode filters with drive, in parallel or in series (a digital model of the analog circuit)",
       "manualUrl": "https://pichenettes.github.io/mutable-instruments-documentation/modules/blades/manual/",
       "tags": ["Filter", "Distortion", "Dual", "Hardware clone"]
+    },
+    {
+      "slug": "Play",
+      "name": "Nova Play",
+      "description": "The controller, the sensors and the touch surfaces of a handheld as voltages, with eight slots for combinations of buttons and for moving knobs. On a computer, a gamepad.",
+      "tags": ["MIDI", "Controller", "External", "Utility"]
     }
   ]
 }

@@ -34,7 +34,7 @@ static const char* ASSETS_REVISION = "r33-nova6"; // nova6: the Nova Modular dem
 static const char* THUMBS_MARKER_NAME = "/.thumbs-version";
 /* Bump when graphics/browser-thumbs/ is regenerated (rack_ui_smoke
    --export-thumbnails). Independent of ASSETS_REVISION above. */
-static const char* THUMBS_REVISION = "t19-nova1"; // nova1: Nova Modular's tiles; t19: only bundled plugins (Core/Fundamental/RackDroidDrums) ship here now -- the rest travel inside their own .rdmod (see app/build.gradle.kts packThumbnailAssets, scripts/make_rdmods.sh); t18: WebP thumbnails (73->17MB); t17: 909/707/606/505 drums; t16: Geomini labels; t15: panel/rail contrast fix; t14: glass panels; t13: warm-studio palette; t12: modern art restyle; t11: RackDroid Drums thumbnails
+static const char* THUMBS_REVISION = "t19-nova2"; // nova2: Nova Play; nova1: Nova Modular's tiles; t19: only bundled plugins (Core/Fundamental/RackDroidDrums) ship here now -- the rest travel inside their own .rdmod (see app/build.gradle.kts packThumbnailAssets, scripts/make_rdmods.sh); t18: WebP thumbnails (73->17MB); t17: 909/707/606/505 drums; t16: Geomini labels; t15: panel/rail contrast fix; t14: glass panels; t13: warm-studio palette; t12: modern art restyle; t11: RackDroid Drums thumbnails
 
 
 /** Shared extraction loop: streams a zip asset (via libarchive) into

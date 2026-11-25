@@ -13,6 +13,9 @@
 
 Plugin* pluginInstance;
 
+/** play.cpp: not from BrickRack, but this fork's own. */
+plugin::Model* createPlayModel();
+
 void init(Plugin* p) {
 	pluginInstance = p;
 
@@ -30,4 +33,5 @@ void init(Plugin* p) {
 	add({"dual-trigger", "Peaks", 48000.f});
 	add({"chiptune-osc", "Edges"});
 	add({"dual-multimode-filter", "Blades"});
+	p->addModel(createPlayModel());
 }
