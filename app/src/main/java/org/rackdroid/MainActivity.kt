@@ -1991,6 +1991,7 @@ class MainActivity : NativeActivity() {
 	private val xyPad by lazy {
 		XyPad(this,
 			bottomClearance = { modulePalette.bounds()?.let { window.decorView.height - it.top } ?: 0 },
+			rightCovered = { chatPanel.width },
 			onPad = { finger, x, y, down -> nativeGamepadPad(finger, x, y, down) },
 			onDrum = { pad, value, down -> nativeGamepadDrum(pad, value, down) },
 			onFader = { fader, value -> nativeGamepadFader(fader, value) })

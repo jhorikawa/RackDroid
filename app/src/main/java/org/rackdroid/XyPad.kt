@@ -36,6 +36,8 @@ class XyPad(
 	/** Pixels to stay clear of at the bottom of the window: the module
 	 * palette sits there, and a popup shown later does not go over it. */
 	private val bottomClearance: () -> Int,
+	/** Pixels on the right that the chat covers. */
+	private val rightCovered: () -> Int,
 	/** finger 0 or 1 */
 	private val onPad: (Int, Float, Float, Boolean) -> Unit,
 	private val onDrum: (Int, Float, Boolean) -> Unit,
@@ -101,7 +103,7 @@ class XyPad(
 				setMargins(0, dp(6), dp(6), 0)
 			})
 		}
-		val p = PopupWindow(holder, ViewGroup.LayoutParams.MATCH_PARENT, dp(200))
+		val p = PopupWindow(holder, activity.window.decorView.width - rightCovered(), dp(200))
 		p.isFocusable = false // never steal keys from the canvas
 		popup = p
 		val decor = activity.window.decorView

@@ -153,6 +153,8 @@ class ChatPanel(
 	private fun dp(v: Int) = (v * activity.resources.displayMetrics.density).toInt()
 
 	val showing get() = dialog?.isShowing == true
+	/** What it covers on the right, in pixels. */
+	val width get() = if (showing) dp(WIDTH_DP) else 0
 	private val working get() = answer != null
 
 	init {
